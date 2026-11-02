@@ -64,8 +64,8 @@ function textOrUndefined(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-/** 档案成员 → 分析对象 */
-function toTarget(member: ArchiveMemberSummary): AnalysisTarget {
+/** 档案成员 → 分析对象（命令与工具共用） */
+export function memberToTarget(member: ArchiveMemberSummary): AnalysisTarget {
   return {
     senderId: member.senderId,
     ...(member.senderName !== undefined ? { senderName: member.senderName } : {}),
@@ -87,7 +87,7 @@ export function selectAnalysisTargets(
   members: readonly ArchiveMemberSummary[],
   member?: string,
 ): AnalysisTargetSelection {
-  const all = members.map(toTarget);
+  const all = members.map(memberToTarget);
   const needle = member?.trim().toLowerCase() ?? '';
 
   if (needle === '') {
@@ -213,7 +213,7 @@ export function registerPersonaAnalysisTool(
         // 私聊只有对面一个人：直接分析 TA 的发言（可能存在多个私聊会话，按 openid 聚合）
         const existing = members.find((item) => item.senderId === record.peerId);
         const own = existing === undefined ? members[0]! : existing;
-        target = toTarget(own);
+        target = memberToTarget(own);
       } else {
         const currentChatKey = personaArchiveKey(config.appId, record.scope, record.peerId);
         const scoped = members.filter((item) => item.chats.some((chat) => chat.chatKey === currentChatKey));
@@ -236,7 +236,7 @@ export function registerPersonaAnalysisTool(
           if (selection.targets.length === 0) {
             throw new Error(
               `${PERSONA_ANALYSIS_TOOL_NAME}: 没有找到「${member}」的发言。`
-              + `档案里有记录的群友：${describeTargets(members.map(toTarget))}`,
+              + `档案里有记录的群友：${describeTargets(members.map(memberToTarget))}`,
             );
           }
           target = selection.targets[0]!;

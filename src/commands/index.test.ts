@@ -32,7 +32,7 @@ function findCommand(commands: ReturnType<typeof build>['commands'], name: strin
 describe('buildCommandList — 权限包装', () => {
   it('管理类命令声明 minRole，公开命令不声明', () => {
     const { commands } = build([OWNER]);
-    const admin = ['new', 'compact', 'model', 'preset', 'persona', 'memory', 'tools', 'bot-status', 'stop'];
+    const admin = ['new', 'compact', 'model', 'preset', 'persona', '人格分析', 'memory', 'tools', 'bot-status', 'stop'];
     for (const name of admin) {
       expect(findCommand(commands, name)?.minRole).toBe('admin');
     }

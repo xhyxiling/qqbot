@@ -352,7 +352,7 @@ Per-chat memory of what was said and how the relationship has progressed, stored
 
 ### Group persona archive & member analysis (personaAnalysis)
 
-Rolling per-chat archive of group/direct messages. It automatically builds a persona profile once a member's message count reaches the threshold, and `qqbot_analyze_persona` can profile a specific member on demand. Everything the same openid said across groups and direct chats is merged into one profile.
+Rolling per-chat archive of group/direct messages. It automatically builds a persona profile once a member's message count reaches the threshold, and `/人格分析` (with an @-mention) or `qqbot_analyze_persona` can profile a specific member on demand. Everything the same openid said across groups and direct chats is merged into one profile.
 
 ```yaml
 - id: im-qqbot
@@ -380,7 +380,8 @@ Rolling per-chat archive of group/direct messages. It automatically builds a per
 - **Automatic analysis**: the first time a member reaches `autoAnalyzeThreshold` a profile is generated; afterwards it is refreshed each time another `threshold` messages arrive. Jobs run serially (one per member at a time), failures cool down for 10 minutes, and a run is aborted after 120 seconds. It never blocks replies.
 - **Manual analysis policy**: without a member it profiles the most active member of the current chat; with a nickname or openid it matches exactly (then openid prefix, then nickname substring) and asks for an openid when the match is ambiguous. The system prompt requires evidence-based statements, separates facts from inferences, labels samples under 30 messages as "small sample", does not judge personality under 5 messages, and never guesses private facts or gives psychological/medical diagnoses.
 - **Structured output**: one-line summary, traits, speaking style, catchphrases, interests, group role, advice and confidence — used for display today and as raw material for new persona presets later.
-- Mention the bot in a group and ask "analyze X's personality", or "analyze the most active member here".
+- **Deterministic trigger (recommended)**: in a group, @ the member first and send `/人格分析` — e.g. `@bot /人格分析 @Alice`. The command reads the member's `member_openid` from the message's mention list, so duplicate nicknames cannot pick the wrong person; the bot must still be @-mentioned to receive group messages (`requireMention`). Without a mention, `/人格分析 <nickname|openid>` is the fallback; in DMs `/人格分析` profiles the other person; without any target it replies with usage and a shortcut list of the chat's active members. Admins only (no restriction when the `identity` lists are empty).
+- You can also let the model call the tool: mention the bot and ask "analyze X's personality" or "analyze the most active member here".
 - The "Members" (群友人格) tab in the settings panel exposes the switches, message limit, retention days, auto-analysis threshold, and a profile table filterable by **nickname / openid / personality trait**; click a nickname to expand the full profile.
 
 ### Access control (access)
@@ -427,6 +428,7 @@ Rolling per-chat archive of group/direct messages. It automatically builds a per
 | `/model` | View or switch model (admins only) |
 | `/preset` | View or switch agent preset (admins only) |
 | `/persona` | List and switch personas per chat (admins only) |
+| `/人格分析` (alias `/persona-analysis`) | Analyze the @-mentioned member and reply with their persona profile (admins only): `@bot /人格分析 @Alice`; accepts `<nickname\|openid>` as a fallback, and profiles the other person in DMs |
 | `/tools` | Diagnostic: show the current persona's tool binding and host tool list (admins only, hidden from the command menu); bind tools from the settings panel dropdown instead |
 | `/memory` | Show per-chat memory and relationship stage (admins only); `/memory add <text>`, `/memory del <n>`, `/memory clear` |
 | `/whoami` | Show your openid and resolved identity for the current chat |
@@ -510,7 +512,7 @@ Resolution strategy: in-process reuse → persisted resume → fresh create.
 - **Session isolation** — one independent Agent per QQ direct user / group
 - **Preset support** — mount presets (toolkits, prompts, etc.) via the `agent-presets` service
 - **Idle eviction** — auto-dispose Agents on timeout to prevent memory leaks
-- **Member persona analysis** — a rolling per-chat archive (`persona-archive.json`) auto-builds/refreshes profiles (`persona-profiles.json`) once a member reaches the message threshold, and `qqbot_analyze_persona` profiles members on demand; the settings panel filters by nickname/openid/trait
+- **Member persona analysis** — a rolling per-chat archive (`persona-archive.json`) auto-builds/refreshes profiles (`persona-profiles.json`) once a member reaches the message threshold; `/人格分析 @member` or `qqbot_analyze_persona` profiles members on demand; the settings panel filters by nickname/openid/trait
 - **Markdown output** — replies sent as Markdown with code-block/table-aware chunking
 - **Image understanding** — supports `qqbot_describe_image` vision to analyze images sent by users
 - **Problem solving** — supports `qqbot_solve` to solve exam/homework problems (question text or screenshot, using the session's current model) and returns a fixed answer + worked-steps layout

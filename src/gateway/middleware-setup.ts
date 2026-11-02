@@ -23,6 +23,7 @@ import type { ImQQBotConfig } from '../config.ts';
 import type { SessionManager } from '../session/index.ts';
 import type { Logger } from '../types.ts';
 import { buildCommandList } from '../commands/index.ts';
+import type { PersonaCommandServices } from '../commands/types.ts';
 import { attachmentProcessor } from '../middleware/attachment.ts';
 import { questionAnswer } from '../middleware/question-answer.ts';
 import { getHistoryStore, historyGroupKey } from '../features/history-store.ts';
@@ -41,6 +42,8 @@ export function setupMiddlewares(
   personaArchive?: PersonaArchive,
   /** 新消息写入档案后的同步通知（自动人格分析排队用，不能阻塞消息链） */
   onArchived?: (notice: PersonaArchiveNotice) => void,
+  /** /人格分析 命令使用的档案与模型服务（档案未启用时不传） */
+  personaServices?: PersonaCommandServices,
 ): void {
   // 1. 错误兜底（最外层洋葱皮）
   bot.use(errorHandler());
@@ -102,7 +105,11 @@ export function setupMiddlewares(
     // 关闭 autoHelp：help 命令由 qqbot 注册为 /bot-help，
     // 避免 SDK 再自动注册一个无前缀的 /help 造成重复
     autoHelp: false,
-    commands: buildCommandList({ manager, config }),
+    commands: buildCommandList({
+      manager,
+      config,
+      ...(personaServices !== undefined ? { persona: personaServices } : {}),
+    }),
   });
   bot.use(slash.middleware);
 

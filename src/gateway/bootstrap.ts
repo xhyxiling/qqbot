@@ -114,6 +114,9 @@ export async function bootstrapGateway(
   setupMiddlewares(
     bot, config, manager, logger, personaArchive,
     autoAnalyzer === undefined ? undefined : (notice) => autoAnalyzer.notify(notice),
+    personaArchive === undefined || profileStore === undefined
+      ? undefined
+      : { archive: personaArchive, profiles: profileStore, ...(llm !== undefined ? { llm } : {}) },
   );
 
   // ── 入站：经过中间件链后的消息交给 dsh agent ──

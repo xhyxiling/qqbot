@@ -5,7 +5,7 @@
  *
  * 命令按 category 分两类：
  *   - agent：底层 dsh agent 通用能力（new/compact/model/stop）
- *   - qqbot：插件自身特有（ping/version/status/persona/whoami/help）
+ *   - qqbot：插件自身特有（ping/version/status/persona/persona-analysis/whoami/help）
  */
 import type { CommandDeps, CategorizedCommand } from './types.ts';
 import { newCommand, compactCommand } from './session.ts';
@@ -13,6 +13,7 @@ import { modelCommand } from './model.ts';
 import { presetCommand } from './preset.ts';
 import { personaCommand } from './persona.ts';
 import { memoryCommand } from './memory.ts';
+import { personaAnalysisCommand } from './persona-analysis.ts';
 import { toolsCommand } from './tools.ts';
 import { whoamiCommand } from './whoami.ts';
 import { statusCommand } from './status.ts';
@@ -66,6 +67,7 @@ export function buildCommandList(deps: CommandDeps): CategorizedCommand[] {
     versionCommand(deps),
     statusCommand(deps),
     personaCommand(deps),
+    personaAnalysisCommand(deps),
     memoryCommand(deps),
     toolsCommand(deps),
     whoamiCommand(deps),

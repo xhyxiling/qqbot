@@ -388,7 +388,7 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 
 ### 群聊人格档案与群友分析（personaAnalysis）
 
-按会话滚动保存群聊/私聊消息，既能自动为累计发言达到阈值的群友生成人格档案，也能用 `qqbot_analyze_persona` 手动分析指定的人；同一个人在不同群/私聊的发言会合并成一份档案。
+按会话滚动保存群聊/私聊消息，既能自动为累计发言达到阈值的群友生成人格档案，也能在群里用 `/人格分析`（@ 指定群友）或 `qqbot_analyze_persona` 手动分析；同一个人在不同群/私聊的发言会合并成一份档案。
 
 ```yaml
 - id: im-qqbot
@@ -416,7 +416,8 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 - **自动分析**：某人累计发言首次达到 `autoAnalyzeThreshold` 时自动生成档案，之后每新增「阈值」条再更新一次；任务串行执行（同一人不会重复排队），失败后冷却 10 分钟重试，超时 120 秒中断。自动分析不会阻塞消息回复。
 - **手动分析口径**：不指定群友时分析当前会话消息量最高的一位；指定昵称或 openid 时精确匹配（再按 openid 前缀、昵称包含兜底），匹配到多人会要求补充 openid。system prompt 强制只依据记录说话、区分事实与推测、样本 <30 条标注「样本偏少」、<5 条不做性格判断，不猜隐私、不做心理/医学诊断。
 - **结构化结果**：模型输出一句话印象（summary）、性格特点（traits）、说话风格（style）、口头禅（catchphrases）、兴趣（interests）、群内角色（role）、相处建议（advice）与置信度（confidence），既用于展示，也可作为后续新增人格预设的素材。
-- 在群里 @机器人 说「分析一下某某的性格」即可；也可直接说「分析群里最活跃的人」。
+- **手动触发（推荐）**：群里先 @ 要分析的人，再发 `/人格分析` —— 即 `@机器人 /人格分析 @小明`。命令按消息里的 @ 列表取 `member_openid`，昵称重名也不会认错；机器人必须被 @ 才会收到群消息（`requireMention`）。不想 @ 时可用 `/人格分析 <昵称或 openid>`；私聊里直接 `/人格分析` 分析对面的人；不带对象时会提示用法并列出当前群活跃群友的快捷入口。命令仅管理员可用（`identity` 名单未配置时视为不限制）。
+- 也可以让模型自己调工具：@机器人 说「分析一下某某的性格」或「分析群里最活跃的人」。
 - 设置面板「群友人格」页签可调整开关、条数、保留天数、自动分析阈值，并查看人格表格；表格支持按**昵称 / openid / 人格特点**筛选，点击昵称可展开完整档案。
 
 ### 访问控制（access）
@@ -463,6 +464,7 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 | `/model` | 查看或切换模型（仅管理员） |
 | `/preset` | 查看或切换 agent preset（新会话生效，仅管理员） |
 | `/persona`（别名 `/人格`） | 查看人格菜单并切换人格（下一条消息生效，仅管理员）；`/persona default` 跟随默认，`/persona off` 关闭本会话人格 |
+| `/人格分析`（别名 `/persona-analysis`） | 现场分析被 @ 的群友并返回人格档案（仅管理员）：`@机器人 /人格分析 @某人`；也可用 `<昵称或 openid>` 指定，私聊里直接分析对方 |
 | `/tools`（别名 `/工具`） | 诊断用：查看当前人格的工具绑定与宿主可用工具清单（仅管理员，不在命令菜单中展示）；日常在设置面板用下拉绑定工具 |
 | `/memory`（别名 `/记忆`） | 查看本会话的长期记忆与关系阶段（仅管理员）；`/memory add <内容>` 手动记一条，`/memory del <序号>` 删除，`/memory clear` 清空要点 |
 | `/whoami`（别名 `/我是谁`） | 查看当前场景下的 openid 与被判定的身份（配置主人/管理员名单用） |
@@ -557,7 +559,7 @@ sessionKey: `qqbot:${appId}:${scope}:${peerId}`，新会话铸造 UUID 会话 id
 - **会话隔离** — 每个 QQ 私聊用户/群聊各一个独立 Agent
 - **Preset 支持** — 可通过 `agent-presets` 服务挂载预设（工具集、prompt 等）
 - **长期记忆** — 按会话保存互动次数、关系阶段与要点（`memory.json`），`/new` 与重启都不清除
-- **群友人格分析** — 按会话保存滚动聊天档案（`persona-archive.json`），累计发言达阈值自动生成/更新人格档案（`persona-profiles.json`），也可用 `qqbot_analyze_persona` 手动分析；设置面板可按昵称/openid/特点筛选
+- **群友人格分析** — 按会话保存滚动聊天档案（`persona-archive.json`），累计发言达阈值自动生成/更新人格档案（`persona-profiles.json`），也可在群里 `/人格分析 @某人` 或调 `qqbot_analyze_persona` 手动分析；设置面板可按昵称/openid/特点筛选
 - **闲置回收** — 超时自动 dispose Agent，防止内存泄漏
 - **Markdown 输出** — 回复以 Markdown 格式发送，支持代码块/表格感知切分
 - **图片理解** — 支持 `qqbot_describe_image` 视觉理解，可分析用户发送的图片
