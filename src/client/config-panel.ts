@@ -27,7 +27,15 @@ import {
 } from '../shared/bind-protocol.ts';
 import { catalogToolNames, groupToolNames, isPluginToolName, mergeToolNames } from '../shared/tool-catalog.ts';
 import { KAOMOJI_STYLES, DEFAULT_KAOMOJI_STYLE, findKaomojiStyle } from '../expressions/kaomoji.ts';
-import { buildVoiceOptions, voiceOptionLabel, type VoiceOption } from '../voice/voice-presets.ts';
+import {
+  DEFAULT_VOICE_MODEL,
+  VOICE_MODELS,
+  buildVoiceOptions,
+  findVoiceModel,
+  followVoiceModel,
+  voiceOptionLabel,
+  type VoiceOption,
+} from '../voice/voice-presets.ts';
 
 /** 访问控制配置（与 src/config.ts 的 AccessControlConfig 对应的局部投影） */
 interface AccessControlWire {
@@ -418,6 +426,8 @@ function VoiceSelectField({ label, value, placeholder, help, options, onChange }
   const current = value.trim();
   const known = options.some((option) => option.value === current);
   const mismatch = known ? options.find((option) => option.value === current)?.requiresModel : undefined;
+  // 不在清单里的历史音色：可能来自另一代语音模型（3.0 / 3.1 的复刻/设计音色不通用）
+  const unknown = current !== '' && !known && options.length > 0;
   const selectValue = known ? current : current === '' ? '' : CURRENT_VOICE_OPTION;
   return createElement('div', { className: 'imqb2-field' },
     createElement('span', { className: 'imqb2-label' }, label),
@@ -444,6 +454,76 @@ function VoiceSelectField({ label, value, placeholder, help, options, onChange }
       ? null
       : createElement('p', { className: 'imqb2-hint-warn' },
           `当前音色只支持 ${mismatch}，与现用语音模型不匹配，合成会失败；请把「语音模型」改成 ${mismatch}。`),
+    unknown
+      ? createElement('p', { className: 'imqb2-hint-warn' },
+          '当前音色不在内置清单中：若它是另一代（3.0 / 3.1）语音模型下创建的音色，合成会失败；'
+          + '请换成当前模型代际的音色，或在新代际下重新克隆。')
+      : null,
+    help === undefined ? null : createElement('p', { className: 'imqb2-hint' }, help),
+  );
+}
+
+/** 不在候选里的历史模型占位（只用于回显，不可重新选中） */
+const CURRENT_MODEL_OPTION = '__imqb2-current-model__';
+/** 模型下拉里的「手动输入其他模型 id」项 */
+const MANUAL_MODEL_OPTION = '__imqb2-manual-model__';
+
+/**
+ * 语音模型下拉（只列插件内置验证过的 Qwen 模型；其他模型走「其他模型 id」手动输入）
+ *
+ * 与「默认音色」联动：切换模型后由面板统一把内置同名音色改写到目标代际、
+ * 目标模型不支持的内置音色回落到该模型缺省音色（见 applyVoiceModel）。
+ */
+function VoiceModelField({ value, help, onChange }: {
+  value: string; help?: ReactNode; onChange: (next: string) => void;
+}): ReactNode {
+  const current = value.trim();
+  const preset = findVoiceModel(current);
+  const [manual, setManual] = useState(preset === undefined && current !== '');
+  const selectValue = manual
+    ? MANUAL_MODEL_OPTION
+    : preset === undefined
+      ? (current === '' ? '' : CURRENT_MODEL_OPTION)
+      : current;
+  return createElement('div', { className: 'imqb2-field' },
+    createElement('span', { className: 'imqb2-label' }, '语音模型'),
+    createElement('select', {
+      className: 'imqb2-input imqb2-select', value: selectValue,
+      onChange: (event: ChangeEvent<HTMLSelectElement>) => {
+        const next = event.currentTarget.value;
+        // 历史模型占位项不可再被选中（它只用于展示当前值）
+        if (next === CURRENT_MODEL_OPTION) return;
+        if (next === MANUAL_MODEL_OPTION) { setManual(true); return; }
+        setManual(false);
+        onChange(next);
+      },
+    },
+      createElement('option', { value: '' }, `（留空，使用缺省 ${DEFAULT_VOICE_MODEL}）`),
+      current !== '' && preset === undefined
+        ? createElement('option', { value: CURRENT_MODEL_OPTION },
+            `${current}（当前模型，不在列表中）`)
+        : null,
+      VOICE_MODELS.map((model) => createElement('option', { key: model.id, value: model.id },
+        model.recommended === true ? `${model.label}（推荐）` : model.label)),
+      createElement('option', { value: MANUAL_MODEL_OPTION }, '其他模型 id（手动输入）'),
+    ),
+    manual
+      ? createElement('input', {
+          className: 'imqb2-input', value: current,
+          placeholder: '自定义模型 id（如 cosyvoice-v2）',
+          spellCheck: false, autoComplete: 'off',
+          onChange: (event: ChangeEvent<HTMLInputElement>) => { onChange(event.currentTarget.value); },
+        })
+      : null,
+    manual
+      ? createElement('p', { className: 'imqb2-hint' },
+          '内置音色清单只覆盖 Qwen-Audio-TTS；其他模型的音色请在「自定义音色」里手动添加。')
+      : preset === undefined
+        ? createElement('p', { className: 'imqb2-hint' },
+            current === ''
+              ? `留空时使用缺省模型 ${DEFAULT_VOICE_MODEL}。`
+              : '当前模型不在内置清单里：只能使用「自定义音色」，内置系统音色不会列出。')
+        : createElement('p', { className: 'imqb2-hint' }, preset.help),
     help === undefined ? null : createElement('p', { className: 'imqb2-hint' }, help),
   );
 }
@@ -476,7 +556,7 @@ function VoicePresetListField({ value, onChange }: {
           }),
           createElement('input', {
             className: 'imqb2-input imqb2-voice-id', value: row.voice ?? '',
-            placeholder: '音色 id（如 qwen-audio-3.0-tts-plus-vd-bailian-…）',
+            placeholder: '音色 id（如 longanfengyue_v3.1 或克隆音色 id）',
             spellCheck: false, autoComplete: 'off',
             onChange: (event: ChangeEvent<HTMLInputElement>) => {
               updateRow(index, { voice: event.currentTarget.value });
@@ -494,8 +574,8 @@ function VoicePresetListField({ value, onChange }: {
       onClick: () => { onChange([{ name: '', voice: '' }, ...value]); },
     }, '＋ 添加音色'),
     createElement('p', { className: 'imqb2-hint' },
-      '这里填的是你自己的声音复刻 / 声音设计音色 id（与账号和模型绑定），下拉里排在内置系统音色之前；'
-      + '留空的音色 id 保存时会被丢弃。'),
+      '这里填的是你自己的声音复刻 / 声音设计音色 id（与账号和模型代际绑定：3.1 模型要用 3.1 下创建的音色），'
+      + '下拉里排在内置系统音色之前；留空的音色 id 保存时会被丢弃。'),
   );
 }
 
@@ -713,7 +793,7 @@ function PersonaCard({ index, value, expanded, available, voiceOptions, onChange
             label: '语音情感/语气（可选）',
             value: value.expressions?.voice?.instruction ?? '',
             placeholder: '如：用清冷、克制的语气，语速稍慢',
-            help: '自然语言指令，合成时随请求下发；留空继承全局「情感/语气指令」。qwen-audio-3.0-tts-plus/flash 支持。',
+            help: '自然语言指令，合成时随请求下发；留空继承全局「情感/语气指令」。qwen-audio-3.1/3.0-tts-plus/flash 支持。',
             onChange: (next) => { updatePersonaVoice({ instruction: next }); },
           }),
           createElement('div', { className: 'imqb2-head' },
@@ -1097,6 +1177,40 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
     }
   };
 
+  /**
+   * 切换语音模型并与音色联动。
+   *
+   * - 全局默认音色：内置同名音色按代际改写；目标模型不支持的内置音色回落到该模型
+   *   的缺省音色；空音色保持空（表示按模型缺省），克隆/设计等未知 id 原样保留。
+   * - 各人格的覆盖音色：同样按目标模型修正，避免人格里还留着上一代的 id。
+   * - preferredVoiceId：用户刚在「默认音色」下拉里选中的 id（它属于目标模型），不再改写。
+   */
+  const applyVoiceModel = (nextModel: string, preferredVoiceId?: string): void => {
+    const nextVoiceId = preferredVoiceId !== undefined
+      ? preferredVoiceId
+      : voice.voice === undefined ? undefined : followVoiceModel(voice.voice, nextModel);
+    patch('voice', {
+      ...voice,
+      model: nextModel,
+      ...(nextVoiceId === undefined ? {} : { voice: nextVoiceId }),
+    });
+
+    const list = form.personas ?? [];
+    let personasChanged = false;
+    const nextPersonas = list.map((persona) => {
+      const currentId = persona.expressions?.voice?.voice;
+      if (currentId === undefined || currentId.trim() === '') return persona;
+      const mapped = followVoiceModel(currentId, nextModel);
+      if (mapped === currentId) return persona;
+      personasChanged = true;
+      return {
+        ...persona,
+        expressions: { ...persona.expressions, voice: { ...persona.expressions?.voice, voice: mapped } },
+      };
+    });
+    if (personasChanged) patch('personas', nextPersonas);
+  };
+
   const tabDirty = (tab: TabDef): boolean => tab.keys.some((key) => changedKeys.includes(key));
 
   // 各分区内容：只渲染当前 tab，表单值始终保存在 form 中，切换不会丢失编辑
@@ -1263,11 +1377,13 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
         )
       : null,
     createElement('div', { className: 'imqb2-group-title' }, '模型与音色'),
-    createElement(FieldRow, {
-      label: '语音模型', value: voice.model ?? '', placeholder: 'qwen-audio-3.0-tts-flash',
-      help: 'qwen-audio-3.0-tts-flash 支持全部内置系统音色；qwen-audio-3.0-tts-plus 只支持部分系统音色，'
-        + '以及声音复刻/设计的专属音色。音色 id 与模型强绑定，切换模型前先确认音色是否兼容。',
-      onChange: (v) => { patch('voice', { ...voice, model: v }); },
+    createElement(VoiceModelField, {
+      value: voice.model ?? '',
+      help: '当前只内置 Qwen-Audio-TTS 的 3.1 / 3.0 模型（其他模型走「其他模型 id」手动输入）。'
+        + '切换模型会自动修正内置系统音色：同名音色跨代改写（longanfengyue ↔ longanfengyue_v3.1），'
+        + '目标模型不支持的内置音色回落到该模型缺省音色；人格里的音色也会跟着改。'
+        + '克隆/设计音色不会自动改，需在新代际下重新创建后填入「自定义音色」。',
+      onChange: (v) => { applyVoiceModel(v); },
     }),
     createElement(VoiceSelectField, {
       label: '默认音色',
@@ -1276,11 +1392,19 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
       options: voiceOptions,
       help: voiceOptions.length > 0
         ? `只能从下拉里选（自定义 ${customPresetCount} 个置顶，其后为内置系统音色）。`
-          + '内置音色与模型强绑定：标了「需 xxx 模型」的项要先改上面的「语音模型」。'
+          + '音色与模型代际绑定：标了「需 xxx 模型」的项选中后会自动把上面的「语音模型」切过去。'
           + '要新增复刻/设计音色，请在下方「自定义音色」里添加名称 + id。人格可在「人格预设」里覆盖。'
         : '当前模型没有可确认的内置音色清单：请在下方「自定义音色」里添加名称 + id，'
-          + '或把「语音模型」改成 qwen-audio-3.0-tts-flash / qwen-audio-3.0-tts-plus。',
-      onChange: (v) => { patch('voice', { ...voice, voice: v }); },
+          + '或把「语音模型」改回 Qwen-Audio 3.1 TTS Flash（3.0 旧模型也可）。',
+      onChange: (v) => {
+        const picked = voiceOptions.find((option) => option.value === v);
+        // 选了另一代模型专属的内置音色：把模型一起切过去（模型下拉就在上面，变化可见）
+        if (picked?.requiresModel !== undefined) {
+          applyVoiceModel(picked.requiresModel, v);
+          return;
+        }
+        patch('voice', { ...voice, voice: v });
+      },
     }),
     createElement(VoicePresetListField, {
       value: voice.presets ?? [],

@@ -48,6 +48,7 @@ import {
   MIN_VOICE_VOLUME,
   normalizeVoiceInstruction,
 } from '../voice/voice-config.ts';
+import { resolveVoicePresetForModel } from '../voice/voice-presets.ts';
 import {
   findKaomojiStyle,
   MAX_KAOMOJI_CUSTOM,
@@ -715,11 +716,15 @@ function voiceSchema(value: unknown, current: VoiceConfig | undefined): VoiceCon
     }
   }
 
+  const model = voiceTextField(record.model, 'voice.model', current?.model?.trim() || DEFAULT_VOICE_MODEL);
   return {
     enabled,
     apiKey,
-    model: voiceTextField(record.model, 'voice.model', current?.model?.trim() || DEFAULT_VOICE_MODEL),
-    voice: voiceTextField(record.voice, 'voice.voice', current?.voice?.trim() || DEFAULT_VOICE_ID),
+    model,
+    voice: resolveVoicePresetForModel(
+      voiceTextField(record.voice, 'voice.voice', current?.voice?.trim() || DEFAULT_VOICE_ID),
+      model,
+    ),
     instruction: voiceInstructionSchema(record.instruction, normalizeVoiceInstruction(current?.instruction) ?? ''),
     presets: voicePresetsSchema(record.presets, current?.presets ?? []),
     baseUrl: voiceBaseUrlSchema(record.baseUrl, current?.baseUrl?.trim() ?? ''),
@@ -745,7 +750,39 @@ function readCurrentVoice(options: BindRoutesOptions): VoiceConfig | undefined {
 }
 
 /**
+ * GET 回显的人格音色按模型代际修正（只动内置系统音色，复刻/设计 id 原样保留）。
+ *
+ * 面板看到的值应与实际合成一致：运行时 `resolveVoiceTuning` 也会做同样的映射。
+ */
+function mapPersonaVoiceIds(personas: unknown, model: string): unknown {
+  if (!Array.isArray(personas)) return personas;
+  let changed = false;
+  const next = personas.map((item) => {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) return item;
+    const persona = item as Record<string, unknown>;
+    const expressions = persona.expressions;
+    if (typeof expressions !== 'object' || expressions === null || Array.isArray(expressions)) return item;
+    const expressionsRecord = expressions as Record<string, unknown>;
+    const voice = expressionsRecord.voice;
+    if (typeof voice !== 'object' || voice === null || Array.isArray(voice)) return item;
+    const voiceRecord = voice as Record<string, unknown>;
+    const id = typeof voiceRecord.voice === 'string' ? voiceRecord.voice.trim() : '';
+    if (id === '') return item;
+    const mapped = resolveVoicePresetForModel(id, model);
+    if (mapped === id) return item;
+    changed = true;
+    return {
+      ...persona,
+      expressions: { ...expressionsRecord, voice: { ...voiceRecord, voice: mapped } },
+    };
+  });
+  return changed ? next : personas;
+}
+
+/**
  * GET 回显脱敏：语音 API Key 永不返回，只回 `hasApiKey` 让面板知道「已保存」。
+ * 同时把内置音色按当前模型代际映射（3.0 ↔ 3.1），避免面板显示的音色
+ * 与实际下发的不一致（跨代 id 会合成失败）。
  * 不修改传入对象（currentConfig 返回的是 apply 时的合并配置）。
  */
 function maskVoiceForClient(current: Record<string, unknown>): Record<string, unknown> {
@@ -753,7 +790,20 @@ function maskVoiceForClient(current: Record<string, unknown>): Record<string, un
   if (typeof voice !== 'object' || voice === null || Array.isArray(voice)) return current;
   const record = voice as Record<string, unknown>;
   const hasApiKey = typeof record.apiKey === 'string' && record.apiKey.trim() !== '';
-  return { ...current, voice: { ...record, apiKey: '', hasApiKey } };
+  const model = typeof record.model === 'string' ? record.model.trim() : '';
+  const voiceId = typeof record.voice === 'string' ? record.voice.trim() : '';
+  return {
+    ...current,
+    voice: {
+      ...record,
+      voice: voiceId === '' ? record.voice : resolveVoicePresetForModel(voiceId, model),
+      apiKey: '',
+      hasApiKey,
+    },
+    ...(Array.isArray(current.personas)
+      ? { personas: mapPersonaVoiceIds(current.personas, model || DEFAULT_VOICE_MODEL) }
+      : {}),
+  };
 }
 
 /** manual 请求体大小上限（appId + appSecret 远小于此值） */

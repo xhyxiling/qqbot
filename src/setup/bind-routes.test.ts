@@ -641,6 +641,57 @@ describe('bind-routes', () => {
     });
   });
 
+  it('GET config：内置音色按模型代际映射（含人格音色），未知音色原样保留', async () => {
+    const { routes } = createHarness({
+      currentConfig: () => ({
+        voice: {
+          enabled: true, apiKey: 'sk-secret',
+          model: 'qwen-audio-3.0-tts-flash', voice: 'longanfengyue_v3.1',
+        },
+        personas: [
+          { id: 'cat', name: '猫娘', prompt: '', expressions: { voice: { voice: 'longanlingxi_v3.1' } } },
+          { id: 'clone', name: '复刻', prompt: '', expressions: { voice: { voice: 'vd-8521' } } },
+        ],
+      }),
+    });
+    const res = fakeRes();
+    await invoke(routes.get(BIND_CONFIG_PATH), fakeReq('GET', { host: '127.0.0.1:3080' }), res);
+    expect(res.statusCode).toBe(200);
+    expect(json(res)).toMatchObject({
+      config: {
+        voice: {
+          apiKey: '', hasApiKey: true,
+          model: 'qwen-audio-3.0-tts-flash', voice: 'longanfengyue',
+        },
+        personas: [
+          { expressions: { voice: { voice: 'longanlingxi' } } },
+          { expressions: { voice: { voice: 'vd-8521' } } },
+        ],
+      },
+    });
+  });
+
+  it('POST config：只改语音模型时，内置音色跟随新代际映射', async () => {
+    let saved: Record<string, unknown> | undefined;
+    const { routes } = createHarness({
+      currentConfig: () => ({
+        voice: { apiKey: 'sk-old', model: 'qwen-audio-3.0-tts-flash', voice: 'longanfengyue' },
+      }),
+      onUpdateConfig: (config) => { saved = config; return true; },
+    });
+    const res = fakeRes();
+    await invoke(
+      routes.get(BIND_CONFIG_PATH),
+      fakeReq('POST', { host: '127.0.0.1:3080' },
+        '{"voice":{"model":"qwen-audio-3.1-tts-flash"}}'),
+      res,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(saved).toMatchObject({
+      voice: { model: 'qwen-audio-3.1-tts-flash', voice: 'longanfengyue_v3.1' },
+    });
+  });
+
   it('POST config：语音 apiKey 留空 = 保持已保存的 Key（面板不回显 Key）', async () => {
     let saved: Record<string, unknown> | undefined;
     const { routes } = createHarness({

@@ -193,7 +193,7 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
   - `maxPerReply`：一条回复最多用几个颜文字（1–3，缺省 1）。
   - `custom`：自定义补充颜文字（最多 20 条，每条 ≤32 字），排在预设清单之后供模型挑选。
   - 颜文字库在 `src/expressions/kaomoji.ts`，按情绪分组；后续表情包（图片）会在同一 `expressions` 容器下新增 `sticker`，人格配置形态不变。
-- `expressions.voice`：**该人格的语音音色**（可选）。`voice` 覆盖全局音色，`rate`（0.5–2）与 `volume`（0–100）可选，`instruction` 覆盖全局情感/语气指令（留空继承全局）；语音功能本身由全局 `voice.apiKey` 控制，留空时这里配置也不生效。示例：`expressions: { voice: { voice: longanfengyue, rate: 1.1, instruction: 请用清冷克制的语气 } }`。
+- `expressions.voice`：**该人格的语音音色**（可选）。`voice` 覆盖全局音色，`rate`（0.5–2）与 `volume`（0–100）可选，`instruction` 覆盖全局情感/语气指令（留空继承全局）；语音功能本身由全局 `voice.enabled` 与 `voice.apiKey` 控制，留空时这里配置也不生效。示例：`expressions: { voice: { voice: longanfengyue_v3.1, rate: 1.1, instruction: 请用清冷克制的语气 } }`。
 - **工具权限是硬约束，不是提示词**：QQ 会话在运行时通过 `tools.restrict({ allow })` 限制模型可见的工具，白名单之外的工具模型根本看不到、调不到（宿主 preset 里的文件读写、命令执行、子 agent、定时任务等一律被挡掉）。
   - 不写 `tools`（缺省）：使用**默认放行清单**——7 个插件内置工具（`qqbot_solve`、`qqbot_describe_image`、`qqbot_send_file`、`qqbot_translate`、`qqbot_summarize`、`qqbot_explain`、`qqbot_rewrite`）+ `ask_user_question` + 只读的 `web_search` / `web_fetch`。
   - `tools: []`：该人格没有任何工具能力（不能做题、看图、发文件、翻译/总结，也不能联网）。
@@ -218,12 +218,12 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
     voice:
       enabled: true                     # 语音总开关；关闭后即使有 Key 也不启用
       apiKey: ''                        # 留空 = 无法启用语音；填入百炼 API Key 后生效
-      model: qwen-audio-3.0-tts-flash   # 语音合成模型（也可用 cosyvoice-v2 等）
-      voice: longanfengyue              # 默认音色
+      model: qwen-audio-3.1-tts-flash   # 语音合成模型（面板里是下拉；3.0 旧模型仍可用）
+      voice: longanfengyue_v3.1         # 默认音色（需与模型同一代际）
       instruction: 场景：夜里她叫住学长，楼道很静；第1句：声音很轻、带一点迟疑，语速偏慢；第2句：吞吐、句尾落地   # 情感/语气指令（自然语言，可选）
       presets:                          # 自定义音色（下拉里排在内置系统音色之前）
         - name: 元气少女
-          voice: qwen-audio-3.0-tts-plus-vd-bailian-85212a2f84dc4f55ba9cddc8fef8be1c
+          voice: qwen-audio-3.1-tts-plus-vd-bailian-<哈希>
       maxChars: 300                     # 单次朗读字数上限（20–1000）
       timeoutMs: 30000                  # 合成超时(ms)（5000–120000）
       # baseUrl: wss://xxx/api-ws/v1/inference   # 自定义 MaaS 网关（可选）
@@ -234,8 +234,8 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 |------|------|--------|------|
 | `voice.enabled` | boolean | `true` | 语音总开关；关闭后即使已保存 API Key 也不注册工具、不合成、不发语音（默认开启，兼容旧配置） |
 | `voice.apiKey` | string | `''` | DashScope API Key；**留空 = 无法启用语音**（面板保存时留空表示保持已保存的 Key；要停用语音请用 `enabled` 开关，不需要清除 Key） |
-| `voice.model` | string | `qwen-audio-3.0-tts-flash` | 语音合成模型 id，需在百炼控制台开通对应模型 |
-| `voice.voice` | string | `longanfengyue` | 默认音色 id；人格可用 `expressions.voice.voice` 覆盖 |
+| `voice.model` | string | `qwen-audio-3.1-tts-flash` | 语音合成模型 id，需在百炼控制台开通对应模型；面板为下拉（3.1 / 3.0 的 flash、plus），其他模型手动填 id |
+| `voice.voice` | string | `longanfengyue_v3.1` | 默认音色 id；音色 id 与模型代际绑定，人格可用 `expressions.voice.voice` 覆盖 |
 | `voice.instruction` | string | `''` | 情感/语气指令（自然语言，≤400 字）：可写成「场景 + 逐句走向」，见下文；人格可用 `expressions.voice.instruction` 覆盖 |
 | `voice.presets` | array | `[]` | 自定义音色清单（`{ name, voice }`，≤20 条）；面板下拉里**排在内置系统音色之前**，后加的排在更上方 |
 | `voice.baseUrl` | string | `''` | 自定义 WebSocket 地址（`ws://` / `wss://`）；留空按 workspace 或官方网关连接 |
@@ -250,9 +250,49 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 - **运行时要求**：使用 Node 22+ 内置 WebSocket；Node 20 环境即使填了 Key 也会在启动日志里告警并关闭语音。
 - 设置面板「语音回复」页签可编辑以上字段；顶部「启用语音回复」开关可随时暂停/恢复语音（Key 保留），已保存的 API Key **永不回显**，只显示「已保存」状态。
 
-#### 内置音色预设（按模型兼容标注）
+#### 内置音色预设（按模型代际标注）
 
-设置面板的「默认音色」与人格卡片的「语音音色」都是**不可输入的原生下拉框**，可以直接选下面的系统音色（以下 id 均已实测可用）：
+设置面板的**「语音模型」和「默认音色」都是下拉框**，且两者联动：
+
+- **语音模型**只列插件内置验证过的 Qwen 模型：`qwen-audio-3.1-tts-flash`（缺省推荐，全部 26 个系统音色）、`qwen-audio-3.1-tts-plus`（高音质，仅 4 个旗舰音色）、`qwen-audio-3.0-tts-flash` / `qwen-audio-3.0-tts-plus`（兼容旧配置）。其他模型（如 `cosyvoice-v2`）走下拉里的「其他模型 id（手动输入）」，音色需自行加到「自定义音色」。
+- **切模型会同步修正音色**：内置同名音色跨代改写（`longanfengyue` ↔ `longanfengyue_v3.1`），目标模型不支持的内置音色回落到该模型的缺省音色，人格里的覆盖音色也一起改；克隆/设计音色不会自动改（会提示需要重新克隆）。
+- **选音色会同步模型**：在「默认音色」里选到标注「需 xxx 模型」的音色时，面板会自动把「语音模型」切到该模型，避免选完必然合成失败。
+
+音色 id 与模型**代际**绑定：3.1 音色一律带 `_v3.1` 后缀，3.0 旧 id 不能用在 3.1 上（会报 `InvalidParameter` / `Engine error [411]`），反之亦然。
+
+
+**3.1 系统音色（默认模型 `qwen-audio-3.1-tts-flash`）**
+
+| 名称 | 音色 id | 特质 |
+|------|---------|------|
+| 龙安风悦 | `longanfengyue_v3.1` | 自然亲切音（女，plus 旗舰音色） |
+| 龙安灵心 | `longanlingxin_v3.1` | 温柔女声（plus 旗舰音色，3.1-plus 缺省音色） |
+| 龙安欢 | `longanhuan_v3.1` | 活泼女声（plus 旗舰音色） |
+| 许南川 | `xunanchuan_v3.1` | 男声（plus 旗舰音色） |
+| 龙安元妃 | `longanyuanfei_v3.1` | 高傲妃子音（女） |
+| 龙安灵希 | `longanlingxi_v3.1` | 可爱甜美音（女） |
+| 龙杰力豆 | `longjielidou_v3.1` | 天真男童音（男） |
+| 龙火火 | `longhuohuo_v3.1` | 顽皮少年音（男） |
+| 龙泡泡 | `longpaopao_v3.1` | 飞天泡泡音（女） |
+| 龙华 | `longhua_v3.1` | 元气甜美女 |
+| 龙婉 | `longwan_v3.1` | 细腻柔声女 |
+| 龙星 | `longxing_v3.1` | 温婉邻家女 |
+| 龙悦 | `longyue_v3.1` | 温暖、磁性（女） |
+| 龙颜 | `longyan_v3.1` | 温暖、自然、亲切（女） |
+| 龙媛 | `longyuan_v3.1` | 温暖治愈女 |
+| 龙妙 | `longmiao_v3.1` | 抑扬顿挫女 |
+| 龙寒 | `longhan_v3.1` | 温暖痴情男 |
+| 龙安洋 | `longanyang_v3.1` | 阳光大男孩 |
+| 龙安智 | `longanzhi_v3.1` | 睿智轻熟男 |
+| 龙哲 | `longzhe_v3.1` | 呆板大暖男 |
+| Bella | `loongbella_v3.1` | 干练、磁性、知性（女） |
+| Stella | `loongstella_v3.1` | 飒爽利落女 |
+| 龙小白 | `longxiaobai_v3.1` | 磁性、质感（女） |
+| 龙书 | `longshu_v3.1` | 沉稳、磁性（男） |
+| 龙橙 | `longcheng_v3.1` | 智慧、磁性（男） |
+| 龙天 | `longtian_v3.1` | 磁性、理智（男） |
+
+**3.0 旧音色（兼容保留：已有 3.0 克隆音色的配置可以继续用 3.0 模型）**
 
 | 名称 | 音色 id | 特质 |
 |------|---------|------|
@@ -269,9 +309,11 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 | Loong John | `loongjohn` | 沉稳亲切美音（男·28岁，英文） |
 | Loong Eva | `loongeva_v3.6` | 高智美音（女·28岁，英文） |
 
-- 音色与模型强绑定（2026-10 实测）：`qwen-audio-3.0-tts-flash` 支持上表全部 12 个内置音色；`qwen-audio-3.0-tts-plus` 只支持 `longanlingxi`、`longanhuan_v3.6`（其余内置音色会报 `Engine error [411]`）。下拉里**仍会列出全部内置音色**，当前模型不支持的项目标注「需 qwen-audio-3.0-tts-flash 模型」；选中不兼容音色时面板给出黄色提示，请一并把「语音模型」改成它要求的模型。
-- 把 `voice.model` 换成 `cosyvoice-v2` 等未知模型时下拉清单为空（没有可确认的兼容矩阵），只剩自定义音色；此时需要自行确认该模型支持的音色 id。
-- 声音复刻/声音设计的专属音色 id（形如 `qwen-audio-3.0-tts-plus-vd-bailian-<哈希>`）通过「自定义音色」添加（名称 + 音色 id），不要求出现在内置预设里；同一后缀在 plus / flash 间共享。
+- **模型与音色的代际必须一致**（2026-11 官方音色表）：`qwen-audio-3.1-tts-flash` 支持上表全部 26 个 3.1 音色；`qwen-audio-3.1-tts-plus` 只支持 4 个旗舰音色（`longanfengyue_v3.1` / `longanlingxin_v3.1` / `longanhuan_v3.1` / `xunanchuan_v3.1`）以及 3.1 的复刻/设计音色；`qwen-audio-3.0-tts-plus` 只支持 `longanlingxi`、`longanhuan_v3.6`。下拉里**仍会列出全部内置音色**，当前模型不支持的项目标注「需 xxx 模型」；选中后「语音模型」会自动切到该模型。
+- **切换代际时内置音色的同名自动映射**：把模型从 3.0 改到 3.1（或反过来）时，`longanfengyue` ↔ `longanfengyue_v3.1` 这类同名内置音色会自动换成当前代际的 id；目标模型不支持的内置音色（如 3.1-plus 只有 4 个旗舰、`longwan_v3.1` 切回 3.0）回落到该模型的缺省音色。复刻/设计音色**不会**自动改 id。
+- **克隆/设计音色不能跨代**：`qwen-audio-3.0-tts-plus-vd-bailian-<哈希>` 这类 id 只在其创建时使用的代际下有效。切到 3.1 后需要**在 3.1 模型下重新克隆/设计**，或直接改用上面的 3.1 系统音色；面板对不在清单里的音色会给出警告。
+- 其他 MaaS 模型（`cosyvoice-v2` 等）通过「语音模型」下拉里的「其他模型 id（手动输入）」填写；这类模型没有可确认的兼容矩阵，内置系统音色不会列出，只能使用「自定义音色」，需要自行确认该模型支持的音色 id。
+- 声音复刻/声音设计的专属音色 id 通过「自定义音色」添加（名称 + 音色 id），不要求出现在内置预设里；同一后缀在 plus / flash 间共享，但**不跨代际共享**。
 
 #### 自定义音色与情感控制
 
@@ -283,7 +325,7 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
   - 元气少女：`场景：放学路上阳光很好；每一句都轻快、带笑意，语速稍快`
   - 女仆：`场景：主人刚回家，她在门口迎接；每一句都恭敬、轻柔，带一点体贴的笑意`
   - 御姐：`场景：深夜酒吧，她半靠在吧台上；每一句都成熟、慵懒，气息柔和，语速稍慢`
-- **文本内情感标签**（服务端能力，`qwen-audio-3.0-tts-plus / flash` 支持）：`[excited]` 兴奋、`[sad]` 悲伤、`[serious]` 严肃、`[laughing]` 笑声、`[sighing]` 叹息、`[whispers]` 耳语、`[very slowly]` / `[very fast]` 放慢/加快。**只有白名单里的这几种标签会被原样送进 TTS**（其它方括号内容一律当注释丢掉，避免把 `[pause:1s]` 这类东西念出来）；日常情感控制仍建议优先用 `instruction`（或让模型在单轮调用里指定语气），标签用在“一句话里逐句变情绪”的场合。
+- **文本内情感标签**（服务端能力，`qwen-audio-3.1 / 3.0-tts-plus / flash` 支持）：`[excited]` 兴奋、`[sad]` 悲伤、`[serious]` 严肃、`[laughing]` 笑声、`[sighing]` 叹息、`[whispers]` 耳语、`[very slowly]` / `[very fast]` 放慢/加快。**只有白名单里的这几种标签会被原样送进 TTS**（其它方括号内容一律当注释丢掉，避免把 `[pause:1s]` 这类东西念出来）；日常情感控制仍建议优先用 `instruction`（或让模型在单轮调用里指定语气），标签用在“一句话里逐句变情绪”的场合。
 - **正文按「台词本」处理**：合成前会清洗回复正文——`|||` 与换行都当句子边界（换成句号，不再连成一句），合并重复标点、去掉标点旁的空格、句末自动补标点；括号/方尖括号/星号里的舞台指示（`（小声）`、`【突然】`、`*叹气*`）整段丢弃，代码块、URL、Markdown、颜文字一并去掉，再按 `maxChars` 截断（优先停在句末，且不会切坏情感标签）。
 
 ### 身份与权限（identity）

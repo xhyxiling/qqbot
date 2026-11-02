@@ -45,7 +45,7 @@ export interface SpeechSynthesisOptions {
   /**
    * 情感/语气指令（自然语言：语种、语速、情绪、说话方式）。
    *
-   * qwen-audio-3.0-tts-plus/flash 的系统音色、复刻音色、设计音色都支持；
+   * qwen-audio-3.1/3.0-tts-plus/flash 的系统音色、复刻音色、设计音色都支持；
    * 余弦/CosyVoice 模型亦支持（长度 ≤100 字符）。留空则不下发该参数。
    */
   instruction?: string;

@@ -9,7 +9,6 @@
  * 关键词命中会把「唱歌」这类闲聊误判成指令，也挡不住「想听你的声音」这类变体。
  */
 import {
-  DEFAULT_VOICE_ID,
   DEFAULT_VOICE_MAX_CHARS,
   DEFAULT_VOICE_MODEL,
   DEFAULT_VOICE_TIMEOUT_MS,
@@ -17,6 +16,7 @@ import {
   type PersonaVoiceConfig,
   type VoiceConfig,
 } from '../config.ts';
+import { resolveVoicePresetForModel } from './voice-presets.ts';
 import { isSpeechWebSocketAvailable } from './tts.ts';
 
 /** 解析后的语音设置（apiKey 已去空白，数值已收敛到合法范围） */
@@ -117,6 +117,9 @@ export function buildSpeechInstruction(base?: string): string {
  * 行为不变，想停用语音时关开关即可，不需要清除 Key。
  *
  * 模型/音色为空时回落到缺省值，避免面板里清空后合成直接失败。
+ * 音色与模型代际不一致时只修正内置系统音色的同名 id（3.0 ↔ 3.1）：
+ * 例如模型是 3.0-flash、音色却物化成了 3.1 的缺省值，这里换回 3.0 同名音色；
+ * 复刻/设计音色保持原样，不会静默换成别的声线。
  */
 export function resolveVoiceSettings(voice: VoiceConfig | undefined): ResolvedVoiceSettings | undefined {
   if (voice?.enabled === false) return undefined;
@@ -124,7 +127,7 @@ export function resolveVoiceSettings(voice: VoiceConfig | undefined): ResolvedVo
   if (apiKey === '') return undefined;
 
   const model = voice?.model?.trim() || DEFAULT_VOICE_MODEL;
-  const voiceId = voice?.voice?.trim() || DEFAULT_VOICE_ID;
+  const voiceId = resolveVoicePresetForModel(voice?.voice, model);
   const baseUrl = voice?.baseUrl?.trim();
   const workspace = voice?.workspace?.trim();
   const instruction = normalizeVoiceInstruction(voice?.instruction);
@@ -177,7 +180,9 @@ export function resolveVoiceTuning(
   const volume = persona?.volume;
   const instruction = normalizeVoiceInstruction(persona?.instruction) ?? settings.instruction;
   return {
-    voice: personaVoice !== undefined && personaVoice !== '' ? personaVoice : settings.voice,
+    voice: personaVoice !== undefined && personaVoice !== ''
+      ? resolveVoicePresetForModel(personaVoice, settings.model)
+      : settings.voice,
     ...(typeof rate === 'number' && Number.isFinite(rate)
       ? { rate: Math.min(MAX_VOICE_RATE, Math.max(MIN_VOICE_RATE, rate)) }
       : {}),
@@ -200,7 +205,7 @@ const SPEECH_CHARS = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Sc
 const SPEECH_CONTENT = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}A-Za-z0-9]/u;
 
 /**
- * 服务端能识别的逐句情感标签（`qwen-audio-3.0-tts-plus / flash`）。
+ * 服务端能识别的逐句情感标签（`qwen-audio-3.0 / 3.1-tts-plus / flash`）。
  *
  * 只有白名单里的标签会原样送进 TTS；其它方括号内容一律当注释丢掉，
  * 免得模型写的 `[pause:1s]`、`[突然]` 被一个字一个字念出来。

@@ -162,7 +162,7 @@ Split the single prompt into several switchable personas, each with its own tool
   - `maxPerReply`: max kaomoji per reply (1–3, default 1).
   - `custom`: extra kaomoji (up to 20 entries, ≤32 chars each), appended after the preset list.
   - The library lives in `src/expressions/kaomoji.ts`; future sticker (image) support will add a `sticker` field to the same `expressions` container without changing the persona shape.
-- `expressions.voice`: **the persona's voice timbre** (optional). `voice` overrides the global timbre, `rate` (0.5–2) / `volume` (0–100) are optional, and `instruction` overrides the global emotion/tone instruction (empty inherits the global value). Voice replies themselves are gated by the global `voice.enabled` switch and `voice.apiKey`; nothing here takes effect unless both are set. Example: `expressions: { voice: { voice: longanfengyue, rate: 1.1, instruction: 请用清冷克制的语气 } }`.
+- `expressions.voice`: **the persona's voice timbre** (optional). `voice` overrides the global timbre, `rate` (0.5–2) / `volume` (0–100) are optional, and `instruction` overrides the global emotion/tone instruction (empty inherits the global value). Voice replies themselves are gated by the global `voice.enabled` switch and `voice.apiKey`; nothing here takes effect unless both are set. Example: `expressions: { voice: { voice: longanfengyue_v3.1, rate: 1.1, instruction: 请用清冷克制的语气 } }`.
 - `tools` is a **hard** runtime constraint: the persona's agent calls `tools.restrict({ allow })`, so tools outside the whitelist are not even visible to the model (not just discouraged by the prompt).
   - Omit `tools` to use the **default allowlist**: the 7 plugin tools (`qqbot_solve`, `qqbot_describe_image`, `qqbot_send_file`, `qqbot_translate`, `qqbot_summarize`, `qqbot_explain`, `qqbot_rewrite`) plus `ask_user_question` and read-only `web_search` / `web_fetch`.
   - `tools: []` disables all tools for that persona.
@@ -183,12 +183,12 @@ Speak replies instead of typing them: built on DashScope real-time speech synthe
     voice:
       enabled: true                     # master switch; even with a key, voice stays off when false
       apiKey: ''                        # empty = cannot enable voice; fill in a Bailian API key to enable
-      model: qwen-audio-3.0-tts-flash   # TTS model (cosyvoice-v2 and others also work)
-      voice: longanfengyue              # default timbre
+      model: qwen-audio-3.1-tts-flash   # TTS model (a dropdown in the panel; 3.0 legacy models still work)
+      voice: longanfengyue_v3.1         # default timbre (must match the model generation)
       instruction: 场景：夜里她叫住学长，楼道很静；第1句：声音很轻、带一点迟疑，语速偏慢；第2句：吞吐、句尾落地   # emotion/tone instruction (natural language, optional)
       presets:                          # custom timbres (listed above the built-in presets)
         - name: 元气少女
-          voice: qwen-audio-3.0-tts-plus-vd-bailian-85212a2f84dc4f55ba9cddc8fef8be1c
+          voice: qwen-audio-3.1-tts-plus-vd-bailian-<hash>
       maxChars: 300                     # max spoken characters per reply (20–1000)
       timeoutMs: 30000                  # synthesis timeout in ms (5000–120000)
       # baseUrl: wss://xxx/api-ws/v1/inference   # custom MaaS gateway (optional)
@@ -199,8 +199,8 @@ Speak replies instead of typing them: built on DashScope real-time speech synthe
 |------|------|--------|------|
 | `voice.enabled` | boolean | `true` | Master switch; when off no tool is registered, nothing is synthesized and no voice is sent even with a saved API key (default on for backward compatibility) |
 | `voice.apiKey` | string | `''` | DashScope API key; **empty = voice cannot be enabled** (in the settings panel, leaving it empty keeps the saved key; use the `enabled` switch to pause voice, no need to clear the key) |
-| `voice.model` | string | `qwen-audio-3.0-tts-flash` | TTS model id; the model must be activated in the Bailian console |
-| `voice.voice` | string | `longanfengyue` | Default timbre id; personas can override it via `expressions.voice.voice` |
+| `voice.model` | string | `qwen-audio-3.1-tts-flash` | TTS model id; the model must be activated in the Bailian console. The panel shows a dropdown (3.1 / 3.0 flash and plus); other models are entered manually |
+| `voice.voice` | string | `longanfengyue_v3.1` | Default timbre id; timbre ids are bound to the model generation, personas can override it via `expressions.voice.voice` |
 | `voice.instruction` | string | `''` | Emotion/tone instruction (natural language, ≤400 chars): can be written as "scene + per-sentence delivery" (see below); personas can override it via `expressions.voice.instruction` |
 | `voice.presets` | array | `[]` | Custom timbre list (`{ name, voice }`, ≤20); **listed before the built-in presets** in the dropdown, newest first |
 | `voice.baseUrl` | string | `''` | Custom WebSocket URL (`ws://` / `wss://`); empty falls back to workspace or the official gateway |
@@ -215,9 +215,49 @@ Speak replies instead of typing them: built on DashScope real-time speech synthe
 - **Runtime requirement**: uses the built-in WebSocket in Node 22+; on Node 20 voice is disabled at startup with a warning even if a key is filled in.
 - The "Voice replies" tab in the settings panel edits these fields; the "Enable voice replies" switch at the top pauses/resumes voice at any time while keeping the key, and a saved API key is **never echoed back**, only a "saved" state is shown.
 
-#### Built-in timbre presets (model compatibility is labelled)
+#### Built-in timbre presets (labelled by model generation)
 
-The "Default timbre" field and each persona's "Voice timbre" field are **native, non-editable dropdowns**. These ids were all verified against a real account:
+The **"Voice model" and "Default timbre" fields are both dropdowns** and they are linked:
+
+- **Voice model** lists only the Qwen models the plugin ships verified presets for: `qwen-audio-3.1-tts-flash` (recommended default, all 26 system timbres), `qwen-audio-3.1-tts-plus` (higher quality, 4 flagship timbres only) and `qwen-audio-3.0-tts-flash` / `qwen-audio-3.0-tts-plus` (legacy compatibility). Other models (e.g. `cosyvoice-v2`) go through "Other model id (manual input)"; their timbres must be added as "Custom timbres".
+- **Switching the model adjusts the timbre**: same-name built-in timbres are rewritten across generations (`longanfengyue` ↔ `longanfengyue_v3.1`), built-in timbres the target model does not support fall back to that model's default timbre, and persona overrides are updated too. Clone/design ids are never rewritten (a warning tells you to re-clone).
+- **Picking a timbre adjusts the model**: choosing a "requires xxx model" timbre in "Default timbre" automatically switches "Voice model" to that model, so a selection can never fail just because of a stale model.
+
+Timbre ids are bound to the model **generation**: 3.1 timbres always carry the `_v3.1` suffix, and 3.0 ids cannot be used with 3.1 models (`InvalidParameter` / `Engine error [411]`), or vice versa.
+
+
+**3.1 timbres (default model `qwen-audio-3.1-tts-flash`)**
+
+| Name | Voice id | Character |
+|------|----------|-----------|
+| 龙安风悦 | `longanfengyue_v3.1` | natural, friendly (female; plus flagship) |
+| 龙安灵心 | `longanlingxin_v3.1` | gentle female (plus flagship; default for 3.1-plus) |
+| 龙安欢 | `longanhuan_v3.1` | lively female (plus flagship) |
+| 许南川 | `xunanchuan_v3.1` | male (plus flagship) |
+| 龙安元妃 | `longanyuanfei_v3.1` | aloof imperial consort (female) |
+| 龙安灵希 | `longanlingxi_v3.1` | cute and sweet (female) |
+| 龙杰力豆 | `longjielidou_v3.1` | innocent boy |
+| 龙火火 | `longhuohuo_v3.1` | mischievous teen |
+| 龙泡泡 | `longpaopao_v3.1` | playful, bubbly (female) |
+| 龙华 | `longhua_v3.1` | energetic, sweet (female) |
+| 龙婉 | `longwan_v3.1` | delicate, soft-spoken (female) |
+| 龙星 | `longxing_v3.1` | gentle, girl-next-door (female) |
+| 龙悦 | `longyue_v3.1` | warm, magnetic (female) |
+| 龙颜 | `longyan_v3.1` | warm, natural, friendly (female) |
+| 龙媛 | `longyuan_v3.1` | warm, healing (female) |
+| 龙妙 | `longmiao_v3.1` | expressive, rhythmic (female) |
+| 龙寒 | `longhan_v3.1` | warm, devoted (male) |
+| 龙安洋 | `longanyang_v3.1` | sunny young man |
+| 龙安智 | `longanzhi_v3.1` | wise, mature young man |
+| 龙哲 | `longzhe_v3.1` | deadpan, warm-hearted man |
+| Bella | `loongbella_v3.1` | polished, magnetic, intellectual |
+| Stella | `loongstella_v3.1` | crisp, confident female |
+| 龙小白 | `longxiaobai_v3.1` | magnetic, textured (female) |
+| 龙书 | `longshu_v3.1` | calm, magnetic (male) |
+| 龙橙 | `longcheng_v3.1` | smart, magnetic (male) |
+| 龙天 | `longtian_v3.1` | magnetic, rational (male) |
+
+**3.0 legacy timbres (kept for configs whose cloned voices are bound to 3.0)**
 
 | Name | Voice id | Character |
 |------|----------|-----------|
@@ -234,9 +274,11 @@ The "Default timbre" field and each persona's "Voice timbre" field are **native,
 | Loong John | `loongjohn` | calm, friendly American English (male, 28) |
 | Loong Eva | `loongeva_v3.6` | high-intelligence American English (female, 28) |
 
-- Timbres are strongly tied to the model (verified 2026-10): `qwen-audio-3.0-tts-flash` supports all 12 built-in timbres above, while `qwen-audio-3.0-tts-plus` only supports `longanlingxi` and `longanhuan_v3.6` (the other built-ins fail with `Engine error [411]`). The dropdown **still lists every built-in timbre** and marks the ones the current model does not support as "requires qwen-audio-3.0-tts-flash"; selecting an incompatible timbre shows a warning — change "TTS model" accordingly.
-- With an unknown model (e.g. `cosyvoice-v2`) the dropdown only contains custom timbres (no confirmed compatibility matrix); you must check which ids that model supports yourself.
-- Custom ids from voice cloning / voice design (e.g. `qwen-audio-3.0-tts-plus-vd-bailian-<hash>`) are added via "Custom timbres" (name + id); they do not need to be in the built-in list, and the same suffix is shared between plus and flash.
+- **Model and timbre generations must match** (official voice list, 2026-11): `qwen-audio-3.1-tts-flash` supports all 26 3.1 timbres above; `qwen-audio-3.1-tts-plus` only supports the 4 flagship timbres (`longanfengyue_v3.1` / `longanlingxin_v3.1` / `longanhuan_v3.1` / `xunanchuan_v3.1`) plus 3.1 clone/design ids; `qwen-audio-3.0-tts-plus` only supports `longanlingxi` and `longanhuan_v3.6`. The dropdown **still lists every built-in timbre** and marks the ones the current model does not support as "requires xxx model"; picking one switches the voice model to it automatically.
+- **Same-name built-in timbres are mapped automatically when switching generations**: changing the model from 3.0 to 3.1 (or back) maps `longanfengyue` ↔ `longanfengyue_v3.1` and similar pairs to the id of the current generation; built-in timbres the target model does not support (e.g. 3.1-plus has only 4 flagships, or `longwan_v3.1` going back to 3.0) fall back to that model's default timbre. Clone/design ids are **never** rewritten.
+- **Clone/design ids do not cross generations**: an id such as `qwen-audio-3.0-tts-plus-vd-bailian-<hash>` is only valid with the generation it was created under. After switching to 3.1, re-clone/re-design under a 3.1 model or pick one of the 3.1 system timbres above; the panel warns about timbres that are not in the list.
+- Other MaaS models (`cosyvoice-v2`, …) are entered through "Other model id (manual input)" in the "Voice model" dropdown; they have no confirmed compatibility matrix, so no built-in timbres are listed and you must add ids as "Custom timbres" yourself.
+- Custom ids from voice cloning / voice design are added via "Custom timbres" (name + id); they do not need to be in the built-in list, and the same suffix is shared between plus and flash — but **not between generations**.
 
 #### Custom timbres and emotion control
 
@@ -248,7 +290,7 @@ The "Default timbre" field and each persona's "Voice timbre" field are **native,
   - energetic girl: `场景：放学路上阳光很好；每一句都轻快、带笑意，语速稍快`
   - maid: `场景：主人刚回家，她在门口迎接；每一句都恭敬、轻柔，带一点体贴的笑意`
   - mature lady: `场景：深夜酒吧，她半靠在吧台上；每一句都成熟、慵懒，气息柔和，语速稍慢`
-- **Inline emotion tags** (service capability, supported by `qwen-audio-3.0-tts-plus / flash`): `[excited]`, `[sad]`, `[serious]`, `[laughing]`, `[sighing]`, `[whispers]`, `[very slowly]` / `[very fast]`, … **Only these whitelisted tags are forwarded to TTS as-is**; any other bracketed text is treated as a note and dropped (so `[pause:1s]` is never read aloud). Prefer `instruction` for everyday emotion control (or a one-off tone for the current turn) — use tags when the emotion changes sentence by sentence.
+- **Inline emotion tags** (service capability, supported by `qwen-audio-3.1 / 3.0-tts-plus / flash`): `[excited]`, `[sad]`, `[serious]`, `[laughing]`, `[sighing]`, `[whispers]`, `[very slowly]` / `[very fast]`, … **Only these whitelisted tags are forwarded to TTS as-is**; any other bracketed text is treated as a note and dropped (so `[pause:1s]` is never read aloud). Prefer `instruction` for everyday emotion control (or a one-off tone for the current turn) — use tags when the emotion changes sentence by sentence.
 - **The reply text is cleaned as a script**: before synthesis, `|||` and line breaks both become sentence boundaries (periods, not one run-on utterance), repeated punctuation is merged, spaces around punctuation are removed and a terminal mark is added; stage directions in brackets/braces/asterisks (`（小声）`, `【突然】`, `*叹气*`) are dropped, and code blocks, URLs, Markdown, kaomoji are stripped before `maxChars` truncation (truncation prefers a sentence end and never cuts a tag in half).
 
 ### Identity (identity)

@@ -41,7 +41,7 @@ describe('resolveVoiceSettings（开关 + apiKey 门控）', () => {
     expect(resolveVoiceSettings(voiceConfig({ apiKey: '   ' }))).toBeUndefined();
   });
 
-  it('apiKey 非空时去空白并回落到缺省模型/音色', () => {
+  it('apiKey 非空时去空白并回落到缺省模型/音色（默认 3.1-flash）', () => {
     const settings = resolveVoiceSettings(voiceConfig({
       apiKey: '  sk-test  ',
       model: '',
@@ -51,11 +51,36 @@ describe('resolveVoiceSettings（开关 + apiKey 门控）', () => {
     }));
     expect(settings).toEqual({
       apiKey: 'sk-test',
-      model: 'qwen-audio-3.0-tts-flash',
-      voice: 'longanfengyue',
+      model: 'qwen-audio-3.1-tts-flash',
+      voice: 'longanfengyue_v3.1',
       maxChars: 300,
       timeoutMs: 30000,
     });
+  });
+
+  it('音色与模型代际不一致时映射成同代内置音色；复刻音色保持不变', () => {
+    expect(resolveVoiceSettings(voiceConfig({
+      model: 'qwen-audio-3.1-tts-flash',
+      voice: 'longanfengyue',
+    }))).toMatchObject({ model: 'qwen-audio-3.1-tts-flash', voice: 'longanfengyue_v3.1' });
+
+    expect(resolveVoiceSettings(voiceConfig({
+      model: 'qwen-audio-3.0-tts-flash',
+      voice: 'longanfengyue_v3.1',
+    }))).toMatchObject({ model: 'qwen-audio-3.0-tts-flash', voice: 'longanfengyue' });
+
+    const clone = 'qwen-audio-3.0-tts-plus-vd-bailian-8521';
+    expect(resolveVoiceSettings(voiceConfig({
+      model: 'qwen-audio-3.1-tts-flash',
+      voice: clone,
+    }))).toMatchObject({ voice: clone });
+  });
+
+  it('3.1-plus 只支持旗舰音色：不兼容的旧音色回落到该模型缺省音色', () => {
+    expect(resolveVoiceSettings(voiceConfig({
+      model: 'qwen-audio-3.1-tts-plus',
+      voice: 'longanlingxi',
+    }))).toMatchObject({ model: 'qwen-audio-3.1-tts-plus', voice: 'longanlingxin_v3.1' });
   });
 
   it('字数与超时收敛到合法范围，非法数值回落缺省', () => {
@@ -129,6 +154,17 @@ describe('resolveVoiceTuning', () => {
       rate: 2,
       volume: 100,
     });
+  });
+
+  it('人格音色按全局模型的代际映射（内置同名音色），自定义 id 不动', () => {
+    const settings31 = resolveVoiceSettings(voiceConfig({
+      model: 'qwen-audio-3.1-tts-flash',
+      voice: 'longanfengyue_v3.1',
+    }))!;
+    expect(resolveVoiceTuning(settings31, { voice: 'longanfengyue' })).toEqual({
+      voice: 'longanfengyue_v3.1',
+    });
+    expect(resolveVoiceTuning(settings31, { voice: 'vd-custom' })).toEqual({ voice: 'vd-custom' });
   });
 
   it('情感指令：人格覆盖全局，人格留空则沿用全局', () => {

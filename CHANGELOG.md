@@ -10,11 +10,14 @@
 
 ### ✨ 新功能
 
+- **升级到 Qwen-Audio-3.1 TTS（默认模型 `qwen-audio-3.1-tts-flash`）**：语音默认模型切到阿里云百炼 3.1 代 TTS（实时 WebSocket 协议不变，`sample_rate` / `mp3` 与旧版一致），内置音色同步扩充为 3.1 的 26 个系统音色（含 4 个 `qwen-audio-3.1-tts-plus` 旗舰音色 `longanfengyue_v3.1` / `longanlingxin_v3.1` / `longanhuan_v3.1` / `xunanchuan_v3.1`）。缺省音色改为 `longanfengyue_v3.1`。
 - **插件检测升级与一键更新**：设置面板新增「插件更新」页签，自动识别当前安装方式（git / npm / 本地路径）并读取 profile 里已装的引用。git 安装对比远端最新 commit（`git ls-remote`），npm 安装对比 registry 的 `latest`；发现新版本时可直接点「立即更新」，桌面版通过宿主 `desktopPnpm` 执行 `dsh plugin --profile <name> update @tencent-connect/dsh-qqbot`（即 `pnpm update`，会重新解析 git 远端 commit），完成后自动 HMR 重载，**不需要再卸载重装**。CLI 或宿主没有 pnpm 服务时页签会给出可直接复制的命令；`file:` / `link:` 本地路径安装、`--patch` 源码直载与固定 commit 的依赖会明确提示不支持自更新及原因。
 - **语音总开关（`voice.enabled`，默认 `true`）**：语音现在需要「开关打开 + 已填写 API Key」两个条件才生效。要暂停语音直接关闭设置面板顶部的「启用语音回复」开关即可，Key 会保留，不用再靠清除 Key 来停用；重新打开立即恢复。旧配置未写 `enabled` 时按开启处理，已有 Key 的用户升级后行为不变。
+- **语音模型改为下拉并与音色联动**：设置面板的「语音模型」从自由输入改成下拉框，内置 4 个已验证的 Qwen 模型（`qwen-audio-3.1-tts-flash` 缺省推荐 / `qwen-audio-3.1-tts-plus` / `qwen-audio-3.0-tts-flash` / `qwen-audio-3.0-tts-plus`），其他模型仍可通过「其他模型 id（手动输入）」填写。切换模型会自动修正音色：内置同名音色跨代改写、目标模型不支持的内置音色回落到该模型缺省音色、人格覆盖音色一起更新；反过来，在「默认音色」里选到「需 xxx 模型」的音色会自动把语音模型切过去，避免选完必然合成失败。
 
 ### 🔧 变更
 
+- **音色按代际标注与同名映射**：3.1 音色一律带 `_v3.1` 后缀，与 3.0 旧 id 不能跨代混用。切换模型代际时，内置同名音色（如 `longanfengyue` ↔ `longanfengyue_v3.1`）会自动换成当前代际的 id；映射结果不被目标模型支持时回落到该模型缺省音色。复刻/设计音色**不会**自动改 id。3.0 旧音色与旧模型继续保留，已有 3.0 克隆音色的配置不受影响。
 - 设置面板的「清除已保存的 Key」回归为纯 Key 管理操作；语音启停统一由开关控制。关闭开关时不注册 `qqbot_voice`、不合成、不发语音，也不消耗额度。
 
 ## [0.11.0] - 2026-10-31
