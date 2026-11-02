@@ -114,7 +114,7 @@ export interface PersonaVoiceConfig {
   rate?: number;
   /** 音量（0–100，缺省 50） */
   volume?: number;
-  /** 情感/语气指令（自然语言，覆盖全局 `voice.instruction`） */
+  /** 情感/语气指令（自然语言，缺省沿用全局 `voice.instruction`；会与本轮 instruction 叠加下发） */
   instruction?: string;
 }
 
@@ -305,7 +305,7 @@ export const PersonaVoiceSchema: Schema<PersonaVoiceConfig> = Schema.object({
   voice: Schema.string().description('音色 id（如 longanfengyue_v3.1；缺省使用全局 voice.voice）'),
   rate: Schema.number().description('语速倍率（0.5–2，缺省 1）'),
   volume: Schema.number().description('音量（0–100，缺省 50）'),
-  instruction: Schema.string().description('情感/语气指令（自然语言；缺省使用全局 voice.instruction）'),
+  instruction: Schema.string().description('情感/语气指令（自然语言；缺省使用全局 voice.instruction；会与本轮 instruction 叠加下发，不会被顶掉）'),
 });
 
 /** 自定义音色子 Schema（用户手动添加的音色：名称 + id） */
@@ -331,7 +331,7 @@ export const VoiceConfigSchema: Schema<VoiceConfig> = Schema.object({
   voice: Schema.string().default(DEFAULT_VOICE_ID)
     .description('默认音色 id（如 longanfengyue_v3.1；音色 id 与模型代际绑定，3.0 音色不能用在 3.1 上）'),
   instruction: Schema.string().default('')
-    .description('情感/语气指令：可写成「场景 + 逐句走向」（如「场景：夜里她叫住学长…；第1句轻声迟疑…；第2句吞吐犹豫…」）'),
+    .description('情感/语气指令：可写成「场景 + 逐句走向」（如「场景：夜里她叫住学长…；第1句轻声迟疑…；第2句吞吐犹豫…」）；本轮 instruction 会与它叠加下发'),
   presets: Schema.array(VoicePresetEntrySchema).default([])
     .description('自定义音色（用户手动添加，面板下拉里排在系统预设之前）'),
   baseUrl: Schema.string().default('')

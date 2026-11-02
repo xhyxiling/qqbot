@@ -23,6 +23,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### 🐛 Fixed
 
 - **"`qqbot_voice` was called but a text message arrived"**: the usual cause is that the Bailian API key's selected permission points do not include the TTS model, so synthesis is refused and the whole turn falls back to text. Synthesis failures now log an actionable hint: `AccessDenied` → "grant this voice model to the API key in the Alibaba Cloud Bailian console", `ModelNotFound` → "the model id does not exist or is not activated for this account". A runtime timbre guard was also added: if a persona or the global setting uses a **built-in** system timbre the current model does not support (e.g. `qwen-audio-3.1-tts-plus` with `longwan_v3.1`), it is swapped for that model's default timbre with a warning instead of degrading the whole turn to text; clone/design ids are left untouched.
+- **Voice sounding flat with no expression**: the persona/global delivery instruction used to be **replaced wholesale** by the per-turn `qqbot_voice` instruction, so a model writing "natural tone" threw away the tuned timbre habits. The three parts are now layered: "this turn's delivery; persona/global delivery; speak casually like a WeChat voice note" (≤400 chars, this turn's delivery kept first when clipping), and the injected prompt now tells the model its per-turn instruction is layered on top of the persona delivery instead of replacing it.
 
 ## [0.11.0] - 2026-10-31
 

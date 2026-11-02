@@ -3,6 +3,7 @@ import {
   NATURAL_SPEECH_HINT,
   buildSpeechInstruction,
   cleanTextForSpeech,
+  composeSpeechInstruction,
   normalizeVoiceInstruction,
   resolveVoiceSettings,
   resolveVoiceTuning,
@@ -227,6 +228,33 @@ describe('buildSpeechInstruction（自然口语提示）', () => {
     expect(text.slice(0, -NATURAL_SPEECH_HINT.length - 1)).toBe(
       `${'柔'.repeat(100)}；${'刚'.repeat(100)}；${'稳'.repeat(100)}`,
     );
+  });
+});
+
+describe('composeSpeechInstruction（本轮走向 + 人格语气叠加）', () => {
+  it('只有一方时原样返回', () => {
+    expect(composeSpeechInstruction('场景：深夜；这一句：放轻', undefined)).toBe('场景：深夜；这一句：放轻');
+    expect(composeSpeechInstruction(undefined, '中低音、句尾落下')).toBe('中低音、句尾落下');
+    expect(composeSpeechInstruction('   ', '  ')).toBeUndefined();
+  });
+
+  it('两方都有时本轮走向在前、人格语气在后，不再互相顶掉', () => {
+    expect(composeSpeechInstruction('场景：沙发上；这一句：慢、带笑', '中低音、略微沙哑'))
+      .toBe('场景：沙发上；这一句：慢、带笑；中低音、略微沙哑');
+  });
+
+  it('内容互相包含时只保留更完整的一份', () => {
+    expect(composeSpeechInstruction('中低音、略微沙哑', '中低音')).toBe('中低音、略微沙哑');
+    expect(composeSpeechInstruction('带笑', '带笑')).toBe('带笑');
+  });
+
+  it('叠加后仍受总长上限约束：本轮走向不会被裁剪掉', () => {
+    const turn = '场景：晚上她靠在沙发上，声音放松；这一句：先轻笑一声，语速放慢，句尾轻轻落下';
+    const base = '柔'.repeat(MAX_VOICE_INSTRUCTION_LEN);
+    const text = buildSpeechInstruction(composeSpeechInstruction(turn, base));
+    expect(text).toContain(turn);
+    expect(text.endsWith(NATURAL_SPEECH_HINT)).toBe(true);
+    expect(text.length).toBeLessThanOrEqual(MAX_VOICE_INSTRUCTION_LEN);
   });
 });
 

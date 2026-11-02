@@ -236,7 +236,7 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 | `voice.apiKey` | string | `''` | DashScope API Key；**留空 = 无法启用语音**（面板保存时留空表示保持已保存的 Key；要停用语音请用 `enabled` 开关，不需要清除 Key） |
 | `voice.model` | string | `qwen-audio-3.1-tts-flash` | 语音合成模型 id，需在百炼控制台开通对应模型**并给 API Key 勾选该模型的权限点**；面板为下拉（3.1 / 3.0 的 flash、plus），其他模型手动填 id |
 | `voice.voice` | string | `longanfengyue_v3.1` | 默认音色 id；音色 id 与模型代际绑定，人格可用 `expressions.voice.voice` 覆盖 |
-| `voice.instruction` | string | `''` | 情感/语气指令（自然语言，≤400 字）：可写成「场景 + 逐句走向」，见下文；人格可用 `expressions.voice.instruction` 覆盖 |
+| `voice.instruction` | string | `''` | 情感/语气指令（自然语言，≤400 字）：可写成「场景 + 逐句走向」，见下文；人格可用 `expressions.voice.instruction` 覆盖。**人格/全局语气与本轮 `qqbot_voice` 的 instruction 叠加下发**，不会被单轮指令顶掉 |
 | `voice.presets` | array | `[]` | 自定义音色清单（`{ name, voice }`，≤20 条）；面板下拉里**排在内置系统音色之前**，后加的排在更上方 |
 | `voice.baseUrl` | string | `''` | 自定义 WebSocket 地址（`ws://` / `wss://`）；留空按 workspace 或官方网关连接 |
 | `voice.workspace` | string | `''` | 百炼业务空间 id（拼 MaaS 地址并在请求头带 `X-DashScope-WorkSpace`） |
@@ -247,7 +247,9 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 - **失败自动退回文字**：鉴权失败、模型未开通、网络超时或清洗后没有可朗读内容时，本轮改发原来的文字，消息不会丢；临时音频写入 `~/.dsh-qqbot/media` 并在发送后删除。
 - **API Key 要勾选模型权限点**：百炼的 Key 只带「已选权限点」里列出的模型。给 Key 勾选 3.1-TTS 之前，`qwen-audio-3.1-tts-*` 会返回 `AccessDenied`，QQ 端表现就是「明明调了 `qqbot_voice` 却收到文字」。日志里会写明原因（`语音合成失败…AccessDenied（请到阿里云百炼控制台，给这个 API Key 勾选该语音模型的权限点）`），去百炼「API Key → 已选权限点」勾上对应模型即可。
 - **音色与模型不匹配时自动兜底**：人格或全局写了当前模型不支持的内置系统音色（如 3.1-plus 配 `longwan_v3.1`），合成前会换成该模型的缺省音色并打一条 warn，而不是让整轮退回文字；克隆/设计音色不做替换。
-- **按人格音色**：`personas[].expressions.voice` 可覆盖全局音色、语速/音量与情感指令，切换人格后下一条语音即生效；模型还可在单轮调用里写「场景 + 逐句走向」（如「场景：夜里她叫住学长，楼道很静；第1句：声音很轻、带一点迟疑…」），仅本轮生效。语音提示词要求模型**每次调用都写场景与逐句走向**，避免所有语音都是同一种默认腔调。
+- **按人格音色**：`personas[].expressions.voice` 可覆盖全局音色、语速/音量与情感指令，切换人格后下一条语音即生效；模型还可在单轮调用里写「场景 + 逐句走向」（如「场景：夜里她叫住学长，楼道很静；第1句：声音很轻、带一点迟疑…」），与本轮的人格语气叠加、仅本轮生效。语音提示词要求模型**每次调用都写场景与逐句走向**，避免所有语音都是同一种默认腔调。
+- **语气指令是叠加而不是替换**：最终下发给 TTS 的是「本轮走向 + 人格/全局语气 + 像发微信语音随口说」三段拼接（≤400 字，超长优先保留本轮走向）。所以人格里写好的音色习惯（中低音、句尾落下、关键词拖长…）不会因为模型只写一句「语气自然」而丢掉——早先的实现是整段替换，听感会明显变平。
+- **听着太平时怎么调**：① 人格/全局 `instruction` 别堆形容词（「成熟、慵懒、温柔」几乎没有指向），改写成可执行的走向：音量高低、语速快慢、逗号处停半拍、关键词拖长加重、句尾落不落、开头要不要带轻笑或叹气；② 单轮调用时让模型按上面的模板写逐句走向；③ 克隆音色本身就平的话，先换系统音色（如 `longanlingxin_v3.1`）对比；④ 需要更慢的语感可加 `expressions.voice.rate`（如 `0.9`）。
 - **自动清洗**：代码块、URL、Markdown 符号、`|||` 分隔符与颜文字不会念出来；`|||` 与换行都按句号断句，句末自动补标点，朗读才有正常换气和收尾。
 - **运行时要求**：使用 Node 22+ 内置 WebSocket；Node 20 环境即使填了 Key 也会在启动日志里告警并关闭语音。
 - 设置面板「语音回复」页签可编辑以上字段；顶部「启用语音回复」开关可随时暂停/恢复语音（Key 保留），已保存的 API Key **永不回显**，只显示「已保存」状态。

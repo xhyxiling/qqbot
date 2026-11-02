@@ -16,7 +16,7 @@ import { isSpeechWebSocketAvailable, synthesizeSpeech } from './tts.ts';
 import {
   buildSpeechInstruction,
   cleanTextForSpeech,
-  normalizeVoiceInstruction,
+  composeSpeechInstruction,
   resolveVoiceSettings,
   resolveVoiceTuning,
   type ResolvedVoiceSettings,
@@ -100,10 +100,10 @@ export class VoiceSpeaker {
         `im-qqbot: 人格音色 ${personaVoice} 不被模型 ${this.settings.model} 支持，本轮改用 ${tuning.voice}`,
       );
     }
-    // 单轮语气 > 人格 > 全局；再统一追加「像发微信语音、不要播音腔」的口语提示，
-    // 否则静态的朗读指令会把每一句都念成同一种播报腔
+    // 本轮走向 + 人格/全局语气叠加（不能互相顶掉），再统一追加
+    // 「像发微信语音、不要播音腔」的口语提示，否则静态的朗读指令会把每一句都念成同一种播报腔
     const instruction = buildSpeechInstruction(
-      normalizeVoiceInstruction(record.voiceInstruction) ?? tuning.instruction,
+      composeSpeechInstruction(record.voiceInstruction, tuning.instruction),
     );
 
     let audio: Buffer;

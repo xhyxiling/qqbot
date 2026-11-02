@@ -111,6 +111,28 @@ export function buildSpeechInstruction(base?: string): string {
 }
 
 /**
+ * 合并「本轮走向」与「人格/全局语气」——两者是不同层次的信息，不能互相顶掉。
+ *
+ * 本轮走向描述**这一句**怎么起伏（模型每轮现写：场景、逐句轻重停顿），
+ * 人格语气描述**这套声线**一贯的说话习惯（静态配置：中低音、句尾落下…）。
+ * 早先是「有本轮指令就整段丢掉人格语气」：模型只要写一句「语气自然一点」，
+ * 人格里调好的音色特征就全没了，听感立刻变平。
+ *
+ * 现在叠加，本轮走向放前面：`buildSpeechInstruction` 超长截断时保留开头，
+ * 不会把这一轮真正的走向切掉；两者内容重复时只留一份。
+ */
+export function composeSpeechInstruction(turn?: string, base?: string): string | undefined {
+  const primary = normalizeVoiceInstruction(turn);
+  const secondary = normalizeVoiceInstruction(base);
+  if (primary === undefined) return secondary;
+  if (secondary === undefined || primary === secondary) return primary;
+  if (primary.includes(secondary) || secondary.includes(primary)) {
+    return primary.length >= secondary.length ? primary : secondary;
+  }
+  return `${primary}；${secondary}`;
+}
+
+/**
  * 解析语音配置；开关关闭或 `apiKey` 为空时返回 undefined（= 语音关闭）。
  *
  * 开关缺省视为打开（兼容未写 `enabled` 的旧配置）；已有 Key 的旧配置升级后
