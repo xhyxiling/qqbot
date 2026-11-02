@@ -39,7 +39,7 @@ export function memoryCommand({ manager, config }: CommandDeps): CategorizedComm
       const payload = raw.slice(raw.split(/\s+/)[0]?.length ?? 0).trim();
 
       if (!config.memory.enabled) {
-        return '记忆功能已关闭。可在 dsh 设置面板的「记忆与关系」中开启。';
+        return '记忆功能已关闭。可在配置文件的 `memory.enabled` 中开启。';
       }
 
       // add：手动追加一条要点

@@ -22,6 +22,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **Timbres are labelled by generation and mapped by name**: 3.1 ids always carry the `_v3.1` suffix and cannot be mixed with 3.0 ids. When switching model generations, built-in same-name timbres (`longanfengyue` ↔ `longanfengyue_v3.1`) are rewritten to the target generation; if the mapped id is unsupported by the target model the plugin falls back to that model's default timbre. Clone/design ids are **never** rewritten. 3.0 timbres and models are still supported, so existing configs with 3.0 cloned voices keep working. Cloned voices were verified to still synthesize on 3.1 models, so the docs and panel no longer claim a re-clone is required after upgrading.
 - "Clear saved key" is now purely key management; voice is started/stopped by the switch. While the switch is off no `qqbot_voice` tool is registered, nothing is synthesized, no voice is sent and no quota is consumed.
+- **"Memory & Relationship" tab removed from the settings panel**: persona settings now live in their own "Members" tab, so the three long-term-memory controls no longer take a whole page. The `memory` feature itself is unchanged (on by default, per-chat notes, prompt section, `/memory` command still works); adjust the switches/limit in the `memory` section of the config file — saving the panel never touches existing `memory` config.
 
 ### 🐛 Fixed
 

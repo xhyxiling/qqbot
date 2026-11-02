@@ -348,7 +348,7 @@ Per-chat memory of what was said and how the relationship has progressed, stored
 - Auto-capture is a conservative heuristic: explicit self-descriptions only, skipping questions and hearsay ("he said…").
 - Group notes are prefixed with the speaker's name to avoid attributing one member's facts to another.
 - The injected section contains days known, interaction count, relationship stage and the notes, with instructions to mention them naturally, never recite the list, and never invent unrecorded facts.
-- Manage it with `/memory` in QQ (admins only), or edit the switches and note limit in the "Memory & Relationship" tab of the settings panel.
+- Manage it with `/memory` in QQ (admins only). The settings panel no longer has a dedicated tab for it (persona settings moved to the "Members" tab); edit the switches and note limit in the `memory` section of the config file.
 
 ### Group persona archive & member analysis (personaAnalysis)
 

@@ -2,7 +2,7 @@
  * QQ 机器人配置面板 — 必要配置的 UI 编辑
  *
  * UI 复刻 DSW 通用设置（settings-form 原语）的视觉风格：
- * 配置按「服务范围 / 身份与权限 / 记忆与关系 / 群友人格 / 对话设置 / 语音回复 / 模型与提示词 / 人格预设」八个分区呈现；
+ * 配置按「服务范围 / 身份与权限 / 群友人格 / 对话设置 / 语音回复 / 模型与提示词 / 人格预设」七个分区呈现；
  * 一次只渲染一个分区，避免单列过长；每个分区有未保存修改时 tab 显示小圆点。
  * 「群友人格」页签含自动分析开关与人格表格（可按昵称 / openid / 人格特点筛选）。
  * 另有一个不写入配置的「插件更新」页签：检查远端版本并执行一键更新。
@@ -1140,7 +1140,7 @@ const SPLIT_OPTIONS: ReadonlyArray<{ value: ReplySplitMode; label: string }> = [
 ];
 
 /** 配置分区：每页只展示一组相关配置，避免单列过长 */
-type TabId = 'access' | 'identity' | 'memory' | 'members' | 'conversation' | 'voice' | 'model' | 'personas' | 'update';
+type TabId = 'access' | 'identity' | 'members' | 'conversation' | 'voice' | 'model' | 'personas' | 'update';
 
 interface TabDef {
   id: TabId;
@@ -1152,7 +1152,6 @@ interface TabDef {
 const TABS: ReadonlyArray<TabDef> = [
   { id: 'access', label: '服务范围', keys: ['access'] },
   { id: 'identity', label: '身份与权限', keys: ['identity'] },
-  { id: 'memory', label: '记忆与关系', keys: ['memory'] },
   { id: 'members', label: '群友人格', keys: ['personaAnalysis'] },
   {
     id: 'conversation', label: '对话设置',
@@ -1328,17 +1327,6 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
       };
     }
 
-    // 记忆配置：maxNotes 收敛到 1–100 的整数
-    if (changed.memory !== undefined) {
-      const m = changed.memory as MemoryWire;
-      const n = Math.round(Number(m.maxNotes));
-      changed.memory = {
-        enabled: m.enabled !== false,
-        autoCapture: m.autoCapture !== false,
-        maxNotes: Number.isFinite(n) ? Math.min(100, Math.max(1, n)) : 20,
-      };
-    }
-
     // 群聊人格档案：条数收敛到 20–1000，保留天数收敛到 1–365，自动分析阈值收敛到 5–200
     if (changed.personaAnalysis !== undefined) {
       const p = changed.personaAnalysis as PersonaAnalysisWire;
@@ -1436,8 +1424,6 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
   const access: AccessControlWire = form.access ?? { c2cMode: 'allowlist', c2cAllow: [], groupMode: 'open', groupAllow: [] };
   const identity: IdentityWire = form.identity
     ?? { enabled: true, ownerOpenIds: [], adminOpenIds: [], friendOpenIds: [] };
-  const memory: MemoryWire = form.memory
-    ?? { enabled: true, autoCapture: true, maxNotes: 20 };
   const personaAnalysis: PersonaAnalysisWire = form.personaAnalysis
     ?? { enabled: true, maxMessages: 300, retentionDays: 30, autoAnalyze: true, autoAnalyzeThreshold: 20 };
   const personas = form.personas ?? [];
@@ -1602,31 +1588,6 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
           help: '对应「身份: 朋友」，其余未命中名单的人都是「陌生人」；一行一个',
           value: identity.friendOpenIds.join('\n'),
           onChange: (v) => { patch('identity', { ...identity, friendOpenIds: v.split('\n').map((s) => s.trim()) }); },
-        })
-      : null,
-  ];
-
-  const memoryPanel: ReactNode[] = [
-    createElement(SwitchRow, {
-      label: '长期记忆', checked: memory.enabled,
-      help: '按会话保存互动次数、关系阶段与要点记忆（~/.dsh-qqbot/memory.json）；/new 只重置上下文，记忆与重启后都会保留',
-      onChange: (v) => { patch('memory', { ...memory, enabled: v }); },
-    }),
-    memory.enabled
-      ? createElement(SwitchRow, {
-          label: '自动捕获要点', checked: memory.autoCapture,
-          help: '从「我叫… / 我喜欢… / 我住在…」这类自述里自动提取要点，不额外调用模型；只说疑问句或转述他人时不会记录',
-          onChange: (v) => { patch('memory', { ...memory, autoCapture: v }); },
-        })
-      : null,
-    memory.enabled
-      ? createElement(FieldRow, {
-          label: '每个会话最多记忆条数', value: String(memory.maxNotes), placeholder: '20',
-          help: '超出后淘汰最旧的要点（1–100）；QQ 端可用 /memory 查看、手动添加或删除',
-          onChange: (v) => {
-            const n = Math.round(Number(v));
-            patch('memory', { ...memory, maxNotes: Number.isFinite(n) ? Math.min(100, Math.max(1, n)) : 20 });
-          },
         })
       : null,
   ];
@@ -2000,7 +1961,6 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
   const panels: Record<TabId, ReactNode[]> = {
     access: accessPanel,
     identity: identityPanel,
-    memory: memoryPanel,
     members: membersPanel,
     conversation: conversationPanel,
     voice: voicePanel,
