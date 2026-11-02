@@ -28,7 +28,7 @@ Scan to join the QQ group / channel
 
 ## About this fork
 
-This repository is a **community fork (secondary development)** of the official [`@tencent-connect/dsh-qqbot`](https://github.com/tencent-connect/dsh-qqbot): it keeps the upstream QQ gateway integration, SDK middleware, session management and settings panel, and continues to iterate on top of it. The package name stays `@tencent-connect/dsh-qqbot` so the DSH plugin system can recognise it, but **this fork is not published to npm** — install it from this repository (see [Method 5](#method-5-install-from-this-repository-fork)) and never mix it with the official npm package in the same profile.
+This repository is a **community fork (secondary development)** of the official [`@tencent-connect/dsh-qqbot`](https://github.com/tencent-connect/dsh-qqbot): it keeps the upstream QQ gateway integration, SDK middleware, session management and settings panel, and continues to iterate on top of it. The package name stays `@tencent-connect/dsh-qqbot` so the DSH plugin system can recognise it, but **this fork is not published to npm** — install it from this repository (see [Method 1](#method-1-desktop-install-recommended) or Method 2) and never mix it with the official npm package in the same profile.
 
 - **Upstream (official)**: <https://github.com/tencent-connect/dsh-qqbot> (npm: `@tencent-connect/dsh-qqbot`)
 - **This fork**: GitHub <https://github.com/xiong-universe/qqbot> ｜ Gitee <https://gitee.com/x17598923823/qq-bot>
@@ -54,13 +54,15 @@ QQ User → QQ WebSocket → dsh-qqbot → ctx.agents → dsh agent loop → LLM
 
 ## Installation
 
-> **Only want this fork's features? Jump to "Method 5".** Methods 1 and 2 install the official npm package, which does not include the persona archive, voice replies or other fork additions.
+> **This repository is the fork: methods 1 and 2 install this fork; method 4 is the official npm package (no persona archive, voice replies or other fork additions).**
 
 ### Method 1: Desktop install (recommended)
 
-No command line needed — everything happens inside the app:
+No command line needed — everything happens inside the app. If the official package was installed before, remove `@tencent-connect/dsh-qqbot` under "Plugins" first so one profile never holds two instances.
 
-1. **Install**: click "Plugins" in the left sidebar → "Add plugin" → enter `@tencent-connect/dsh-qqbot@latest` → install and start now
+1. **Install**: click "Plugins" in the left sidebar → "Add plugin" → enter this repository's URL → install and start now
+   - Gitee (faster in China): `https://gitee.com/x17598923823/qq-bot`
+   - GitHub: `https://github.com/xiong-universe/qqbot`
 
 <img src="./assets/docs/install.png" alt="In-app plugin install" width="560" />
 
@@ -70,11 +72,14 @@ No command line needed — everything happens inside the app:
 
 Credentials are saved automatically after the scan; later launches need no re-scan.
 
-### Method 2: Manual
+### Method 2: CLI install
 
 ```bash
-# Add to a profile
-npx @deepseek-ai/dsh plugin --profile qqbot add @tencent-connect/dsh-qqbot
+# From this repository (recommended; updates follow this repository)
+npx @deepseek-ai/dsh plugin --profile qqbot add https://gitee.com/x17598923823/qq-bot.git
+
+# Or from a local tarball (npm pack produces tencent-connect-dsh-qqbot-0.11.0.tgz)
+npx @deepseek-ai/dsh plugin --profile qqbot add ./tencent-connect-dsh-qqbot-0.11.0.tgz
 
 # Start
 npx @deepseek-ai/dsh --profile qqbot
@@ -88,50 +93,41 @@ In environments without the in-app binding page (pure CLI), set `QQBOT_BIND_OPEN
 
 > **Note**: Upgrade to `0.4.0` or later for browser-link scanning, which avoids QR code misalignment in some terminals.
 
-### Method 3: Local path
+### Method 3: Local source / --patch dev mode
+
+For code changes. Clone this repository first (`lib/` is committed, so installing straight from the repository needs no build; after editing sources run `pnpm build`):
 
 ```bash
-# Build
-cd /path/to/dsh-qqbot
+git clone https://github.com/xiong-universe/qqbot
+cd qqbot
 pnpm install && pnpm build
 
 # Add to a profile (local path)
-npx @deepseek-ai/dsh plugin --profile qqbot add /path/to/dsh-qqbot
+npx @deepseek-ai/dsh plugin --profile qqbot add /path/to/qqbot
 
 # Start
 export QQBOT_APPID="yourAppID" QQBOT_SECRET="yourAppSecret"
 npx @deepseek-ai/dsh --profile qqbot
 ```
 
-### Method 4: --patch dev mode
+Run from source without installing:
 
 ```bash
 export QQBOT_APPID="yourAppID" QQBOT_SECRET="yourAppSecret"
-npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
+npx @deepseek-ai/dsh web --patch /path/to/qqbot/cordis.dev.yml
 ```
 
-### Note on methods 1–4
+### Method 4: Install the official package (no fork features)
 
-Methods 1 and 2 install the **official npm package**, which does not contain this fork's features; methods 3 and 4 run a local checkout, so `git clone` this repository first. To use the fork's features, install from this repository (method 5).
+Only needed to compare against upstream behaviour:
 
-### Method 5: Install from this repository (fork)
-
-This fork commits its build output (`lib/`), so it can be installed straight from the repository without a local build:
-
-- **Desktop**: "Plugins" in the left sidebar → "Add plugin" → enter the repository URL
-  - GitHub: `https://github.com/xiong-universe/qqbot`
-  - Gitee (faster in China): `https://gitee.com/x17598923823/qq-bot`
-- **CLI (from the repository)**:
+- **Desktop**: "Plugins" → "Add plugin" → enter `@tencent-connect/dsh-qqbot@latest`
+- **CLI**:
   ```bash
-  npx @deepseek-ai/dsh plugin --profile qqbot add https://gitee.com/x17598923823/qq-bot.git
-  ```
-- **CLI (tarball)**:
-  ```bash
-  npm pack   # produces tencent-connect-dsh-qqbot-<version>.tgz, currently 0.11.0
-  npx @deepseek-ai/dsh plugin --profile qqbot add ./tencent-connect-dsh-qqbot-0.11.0.tgz
+  npx @deepseek-ai/dsh plugin --profile qqbot add @tencent-connect/dsh-qqbot
   ```
 
-> Uninstall the official `@tencent-connect/dsh-qqbot` first (`npx @deepseek-ai/dsh plugin --profile qqbot remove @tencent-connect/dsh-qqbot`) so the same profile never holds two instances. Run `/bot-version` in QQ to confirm the fork version is active.
+> The official package shares the same name (`@tencent-connect/dsh-qqbot`) — never install both; uninstall the other one first. After installing this fork, run `/bot-version` in QQ to confirm.
 
 ## Checking for updates
 
@@ -163,6 +159,7 @@ Upgrading no longer means uninstalling and reinstalling: the settings panel has 
 | `personas` | array | `[]` | Persona presets (switchable via `/persona` in QQ, each with an optional `tools` whitelist) |
 | `defaultPersona` | string | `''` | Default persona id; empty disables personas |
 | `voice` | object | see below | Outbound voice (TTS): **voice is disabled when `enabled` is off or `apiKey` is empty**, see below |
+| `memory` | object | see below | Long-term memory & relationship state: per-chat interaction count, stage and self-described notes, local only; no settings-panel tab, see below |
 | `personaAnalysis` | object | see below | Member persona archive: stores per-chat messages, auto-analyzes at a threshold and supports `qqbot_analyze_persona`; local only, see below |
 | `textChunkLimit` | number | `4500` | Max chars per message |
 | `streaming` | boolean | `true` | Enable streaming output (always disabled in groups) |
@@ -373,6 +370,8 @@ Resolves who sent each message by openid and injects an identity tag so personas
 
 ### Long-term memory (memory)
 
+> **The settings panel no longer has a "Memory & relationship" tab**: this feature is on by default; adjust the switches and note limit in the `memory` section of the config file only, and use `/memory` in QQ (admins only) for day-to-day viewing/management.
+
 Per-chat memory of what was said and how the relationship has progressed, stored separately from session history: `/new` only resets context, memory survives `/new` and restarts (`~/.dsh-qqbot/memory.json`).
 
 ```yaml
@@ -394,7 +393,8 @@ Per-chat memory of what was said and how the relationship has progressed, stored
 - Auto-capture is a conservative heuristic: explicit self-descriptions only, skipping questions and hearsay ("he said…").
 - Group notes are prefixed with the speaker's name to avoid attributing one member's facts to another.
 - The injected section contains days known, interaction count, relationship stage and the notes, with instructions to mention them naturally, never recite the list, and never invent unrecorded facts.
-- Manage it with `/memory` in QQ (admins only). The settings panel no longer has a dedicated tab for it (persona settings moved to the "Members" tab); edit the switches and note limit in the `memory` section of the config file.
+- **How it differs from the persona archive**: memory stores "relationship state + self-described facts", isolated per chat, to make conversations feel continuous; `personaAnalysis` stores raw messages merged across chats by openid, to build persona profiles. They have independent switches and do not affect each other.
+- Manage it with `/memory` in QQ (admins only): `/memory` to view, `/memory add <text>`, `/memory del <n>`, `/memory clear`.
 
 ### Group persona archive & member analysis (personaAnalysis)
 
@@ -420,7 +420,7 @@ Rolling per-chat archive of group/direct messages. It automatically builds a per
 | `personaAnalysis.autoAnalyzeThreshold` | number | `20` | Trigger threshold (5–200); an existing profile is refreshed only after this many new messages |
 
 - **Local only**: messages live in `~/.dsh-qqbot/persona-archive.json`, analysis results in `~/.dsh-qqbot/persona-profiles.json`; nothing is uploaded, delete both files to erase everything.
-- **Why a local archive**: the QQ OpenAPI does not expose arbitrary group history, and the inbound history buffer only keeps the last `historyLimit` messages and is cleared after every reply, so it cannot support long-term summaries. Only messages received while the bot is running (after enabling the feature) can be recorded.
+- **Why a local archive**: the QQ OpenAPI does not expose arbitrary group history, and the SDK's inbound history buffer is an in-memory ring that keeps only the last `historyLimit` messages (10 by default) and is lost on restart, so it cannot support long-term summaries. Only messages received while the bot is running (after enabling the feature) can be recorded.
 - **Cross-chat merge**: grouped purely by the platform-issued openid (in practice the same person gets the same openid in direct chats and groups), so messages from different groups and DMs end up in a single profile; if some chat issues a different openid it becomes its own profile. Different openids are never merged even with identical nicknames.
 - **When messages are recorded**: after access control and before the @ mention gate; the middleware itself **does not filter by mentions** — anything that arrives is archived. Rejected chats/users, the bot's own messages, slash commands and empty content are skipped.
 - **What the platform actually delivers (important)**: the QQ OpenAPI only pushes `GROUP_AT_MESSAGE_CREATE` (messages that @ the bot) to a **standard group bot**, so group chatter without an @ never reaches the plugin; only **private-domain bots / bots with the full group-message permission** also receive `GROUP_MESSAGE_CREATE` (every group message), and then the archive records all of it. The capture strip above the profile table on the "Members" tab shows the archived volume, the event types the platform actually delivered (e.g. `GROUP_AT_MESSAGE_CREATE ×12`), and a "mention-only" / "full group messages" badge; `/人格分析` prints the same explanation. These counters are persisted with the archive, so they survive restarts.

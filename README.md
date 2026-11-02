@@ -28,7 +28,7 @@
 
 ## 二次开发说明
 
-本仓库是官方 [`@tencent-connect/dsh-qqbot`](https://github.com/tencent-connect/dsh-qqbot) 的**二次开发版本（Fork）**：保留上游的 QQ 接入、SDK 中间件、会话管理与设置面板能力，在此基础上继续迭代插件功能。npm 包名沿用 `@tencent-connect/dsh-qqbot` 以便 DSH 插件系统识别，但**本仓库没有发布到 npm**，安装时必须使用本仓库地址（见「[方式五：从本仓库安装](#方式五从本仓库fork安装)」），且不要与官方 npm 包混装。
+本仓库是官方 [`@tencent-connect/dsh-qqbot`](https://github.com/tencent-connect/dsh-qqbot) 的**二次开发版本（Fork）**：保留上游的 QQ 接入、SDK 中间件、会话管理与设置面板能力，在此基础上继续迭代插件功能。npm 包名沿用 `@tencent-connect/dsh-qqbot` 以便 DSH 插件系统识别，但**本仓库没有发布到 npm**，安装时必须使用本仓库地址（见「[方式一：桌面版安装](#方式一桌面版安装推荐)」或「方式二：命令行安装」），且不要与官方 npm 包混装。
 
 - **上游（官方）**：<https://github.com/tencent-connect/dsh-qqbot>（npm: `@tencent-connect/dsh-qqbot`）
 - **本仓库（二次开发）**：GitHub <https://github.com/xiong-universe/qqbot> ｜ Gitee <https://gitee.com/x17598923823/qq-bot>
@@ -43,7 +43,7 @@
 
 > **关于同步**：本仓库会定期合入上游修复；上游新增的功能不保证已经出现在本仓库，请以本仓库代码与 [CHANGELOG](./CHANGELOG.md) 为准。反馈问题时请注明「二次开发版本」与版本号（可在 QQ 里发 `/bot-version` 查看），方便定位。
 
-完整功能与配置说明见下文；只关心「怎么装」可直接跳到「[方式五：从本仓库安装](#方式五从本仓库fork安装)」。
+完整功能与配置说明见下文；只关心「怎么装」可直接跳到「[安装](#安装)」。
 
 ## 架构
 
@@ -56,13 +56,15 @@ QQ 用户 → QQ WebSocket → dsh-qqbot → ctx.agents → dsh agent loop → L
 
 ## 安装
 
-> **只想用本仓库（二次开发版）的功能？直接看「方式五」。** 方式一、方式二安装的是官方 npm 包，不包含本仓库新增的人格档案、语音回复等功能。
+> **本仓库是二次开发版：方式一、方式二安装的就是本仓库版本；方式四才是官方 npm 包（不含人格档案、语音回复等功能）。**
 
 ### 方式一：桌面版安装（推荐）
 
-无需命令行，全程在应用内完成：
+无需命令行，全程在应用内完成。若之前装过官方版，先在「插件」里卸载 `@tencent-connect/dsh-qqbot`，避免同一 profile 出现两份实例。
 
-1. **安装**：左侧栏点击「插件」→「添加插件」→ 输入 `@tencent-connect/dsh-qqbot@latest` → 安装并立即启动
+1. **安装**：左侧栏点击「插件」→「添加插件」→ 输入本仓库地址 → 安装并立即启动
+   - Gitee（国内更快）：`https://gitee.com/x17598923823/qq-bot`
+   - GitHub：`https://github.com/xiong-universe/qqbot`
 
 <img src="./assets/docs/install.png" alt="端内添加插件" width="560" />
 
@@ -72,11 +74,14 @@ QQ 用户 → QQ WebSocket → dsh-qqbot → ctx.agents → dsh agent loop → L
 
 扫码成功后凭据自动保存，后续启动无需再次扫码。
 
-### 方式二：手动执行
+### 方式二：命令行安装
 
 ```bash
-# 安装到 profile
-npx @deepseek-ai/dsh plugin --profile qqbot add @tencent-connect/dsh-qqbot
+# 从本仓库安装（推荐，跟随本仓库更新）
+npx @deepseek-ai/dsh plugin --profile qqbot add https://gitee.com/x17598923823/qq-bot.git
+
+# 或从本地 tarball 安装（npm pack 产出 tencent-connect-dsh-qqbot-0.11.0.tgz）
+npx @deepseek-ai/dsh plugin --profile qqbot add ./tencent-connect-dsh-qqbot-0.11.0.tgz
 
 # 启动
 npx @deepseek-ai/dsh --profile qqbot
@@ -90,50 +95,41 @@ npx @deepseek-ai/dsh --profile qqbot
 
 > **提示**：建议升级至 `0.4.0` 以上版本扫码，支持点击链接在浏览器打开，避免部分终端二维码渲染错位的问题。
 
-### 方式三：本地路径安装
+### 方式三：本地源码 / --patch 开发模式
+
+适合修改代码调试。先 clone 本仓库（构建产物 `lib/` 已入库，直接安装仓库可不构建，改源码后需要 `pnpm build`）：
 
 ```bash
-# 构建
-cd /path/to/dsh-qqbot
+git clone https://github.com/xiong-universe/qqbot
+cd qqbot
 pnpm install && pnpm build
 
 # 安装到 profile（本地路径）
-npx @deepseek-ai/dsh plugin --profile qqbot add /path/to/dsh-qqbot
+npx @deepseek-ai/dsh plugin --profile qqbot add /path/to/qqbot
 
 # 启动
 export QQBOT_APPID="你的AppID" QQBOT_SECRET="你的AppSecret"
 npx @deepseek-ai/dsh --profile qqbot
 ```
 
-### 方式四：--patch 开发模式
+不安装、直接以源码调试：
 
 ```bash
 export QQBOT_APPID="你的AppID" QQBOT_SECRET="你的AppSecret"
-npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
+npx @deepseek-ai/dsh web --patch /path/to/qqbot/cordis.dev.yml
 ```
 
-### 方式一 / 二 / 三 / 四 的说明
+### 方式四：安装官方版本（不含二次开发功能）
 
-方式一、方式二安装的是**官方 npm 包**，不包含本仓库的二次开发功能；方式三、方式四使用本地源码，需要先 `git clone` 本仓库。想用本仓库的功能，推荐直接看方式五。
+仅在需要对比上游行为时使用：
 
-### 方式五：从本仓库（fork）安装
-
-这是安装**二次开发版**的推荐方式。本仓库是 `@tencent-connect/dsh-qqbot` 的二次开发分支，构建产物 `lib/` 已入库，直接从仓库安装即可，无需本地构建：
-
-- **桌面版**：左侧栏「插件」→「添加插件」→ 填入仓库地址
-  - GitHub：`https://github.com/xiong-universe/qqbot`
-  - Gitee（国内更快）：`https://gitee.com/x17598923823/qq-bot`
-- **命令行（从仓库安装）**：
+- **桌面版**：左侧栏「插件」→「添加插件」→ 输入 `@tencent-connect/dsh-qqbot@latest`
+- **命令行**：
   ```bash
-  npx @deepseek-ai/dsh plugin --profile qqbot add https://gitee.com/x17598923823/qq-bot.git
-  ```
-- **命令行（tarball）**：
-  ```bash
-  npm pack   # 产出 tencent-connect-dsh-qqbot-<版本号>.tgz，当前为 0.11.0
-  npx @deepseek-ai/dsh plugin --profile qqbot add ./tencent-connect-dsh-qqbot-0.11.0.tgz
+  npx @deepseek-ai/dsh plugin --profile qqbot add @tencent-connect/dsh-qqbot
   ```
 
-> 安装二次开发版前请先卸载官方 `@tencent-connect/dsh-qqbot`（`npx @deepseek-ai/dsh plugin --profile qqbot remove @tencent-connect/dsh-qqbot`），避免同一 profile 内出现两份实例。安装后可用 `/bot-version` 确认运行的是本仓库版本。
+> 官方包与本仓库**同包名**（`@tencent-connect/dsh-qqbot`），不要同时安装；切换前先卸载另一份。安装本仓库后可在 QQ 里发 `/bot-version` 确认版本。
 
 ## 检测与更新
 
@@ -165,6 +161,7 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 | `personas` | array | `[]` | 人格预设列表（QQ 端 `/persona` 切换，可配置 `tools` 工具白名单），见下文 |
 | `defaultPersona` | string | `''` | 默认人格 id，留空表示不启用人格 |
 | `voice` | object | 见下文 | 出站语音（TTS）：**`enabled` 关闭或 `apiKey` 留空即关闭语音功能**，见下文 |
+| `memory` | object | 见下文 | 长期记忆与关系状态：按会话保存互动次数、关系阶段与自述要点，只存本机；设置面板无对应页签，见下文 |
 | `personaAnalysis` | object | 见下文 | 群友人格档案：按会话记录消息，达阈值自动分析并可手动调用 `qqbot_analyze_persona`，只存本机，见下文 |
 | `textChunkLimit` | number | `4500` | 单条消息最大字符数 |
 | `streaming` | boolean | `true` | 是否启用流式输出（群聊始终不启用） |
@@ -398,6 +395,8 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 
 ### 长期记忆与关系状态（memory）
 
+> **设置面板已移除「记忆与关系」页签**：本功能默认开启，开关与条数只能在配置文件的 `memory` 段调整；日常查看/管理用 QQ 端 `/memory`（仅管理员）。
+
 按会话独立保存「聊过什么 + 关系进展」，与会话历史解耦：`/new` 只重置上下文，记忆仍在；重启后同样保留（`~/.dsh-qqbot/memory.json`）。
 
 ```yaml
@@ -419,7 +418,8 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 - **自动捕获是保守启发式**：只匹配明确的自述句式，跳过疑问句与「他说/听说」这类转述；宁可少记也不乱记。
 - **群聊按群记录**：同一群里不同说话人的要点会带 `[昵称]` 前缀，避免把 A 的自述算到 B 头上。
 - **注入内容**：认识天数、互动次数、关系阶段与要点清单，并要求模型只在相关话题时自然提起、不复述清单、不编造未记录的内容。
-- 可在 QQ 端用 `/memory` 查看和管理（仅管理员）；设置面板已不再提供该页签（人格配置独立为「群友人格」），开关与条数请在配置文件的 `memory` 段调整。
+- **和群友人格档案的区别**：memory 记「关系与自述要点」，按会话隔离，用来让对话更自然；`personaAnalysis` 存「消息原文」，按 openid 跨会话合并，用来生成人格档案。两者独立开关、互不影响。
+- 可在 QQ 端用 `/memory` 查看和管理（仅管理员）：`/memory` 查看，`/memory add <内容>` 记一条，`/memory del <序号>` 删除，`/memory clear` 清空要点。
 
 ### 群聊人格档案与群友分析（personaAnalysis）
 
@@ -445,7 +445,7 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 | `personaAnalysis.autoAnalyzeThreshold` | number | `20` | 自动分析触发条数（5–200）；已有档案时，新增条数 ≥ 阈值才会更新 |
 
 - **数据只在本机**：发言档案写在 `~/.dsh-qqbot/persona-archive.json`，分析结果写在 `~/.dsh-qqbot/persona-profiles.json`，都不会上传到任何地方；删除这两个文件即可清空全部记录。
-- **为什么需要本地档案**：QQ 官方没有「拉取任意群历史消息」的接口，入站历史缓冲也只保留最近 `historyLimit` 条且在每次回复后清空，无法支撑长期总结。所以只能记录机器人运行期间、功能开启之后的消息，无法回溯上线前的历史。
+- **为什么需要本地档案**：QQ 官方没有「拉取任意群历史消息」的接口；SDK 的入站历史缓冲是内存里的环形缓冲，只保留最近 `historyLimit` 条（默认 10）且重启即丢失，无法支撑长期总结。所以只能记录机器人运行期间、功能开启之后的消息，无法回溯上线前的历史。
 - **跨群合并**：只按平台下发的 openid 聚合（实测同一个人在私聊与群聊拿到的 openid 相同），因此不同群、群聊与私聊的发言会合并成一份档案；若某个会话下发的 openid 不同则单独成档。不同 openid 即使昵称相同也不会合并（不按昵称猜测身份）。
 - **记录时机**：访问控制之后、@ 门控之前，中间件本身**不做 @ 过滤**——只要消息到达就写档；被访问控制拒绝的群/用户、机器人自己的消息、斜杠命令与空内容不会写入。
 - **采集边界（重要）**：QQ 官方对**普通群机器人**只下发 `GROUP_AT_MESSAGE_CREATE`（被 @ 的群消息），群友没 @ 机器人的发言平台根本不会推给插件；只有**私域 / 开通「全量群消息」权限**的机器人还会收到 `GROUP_MESSAGE_CREATE`（群内每条消息），此时档案会自动记录全部发言。设置面板「群友人格」页签上方的采集状态条会显示已归档条数、平台实际下发过的事件类型（如 `GROUP_AT_MESSAGE_CREATE ×12`），并明确标出「仅 @ 消息」或「全量群消息」；`/人格分析` 的用法提示也会带上同样的说明。这些统计随档案一起落盘，重启后仍可查看。
