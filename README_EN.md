@@ -4,9 +4,11 @@
 
 **A QQ Bot plugin for [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) (dsh), connecting DeepSeek AI assistants to QQ private and group chats.**
 
-[![npm version](https://img.shields.io/npm/v/@tencent-connect/dsh-qqbot)](https://www.npmjs.com/package/@tencent-connect/dsh-qqbot)
+**⚠️ This repository is a community fork (secondary development) of [`@tencent-connect/dsh-qqbot`](https://github.com/tencent-connect/dsh-qqbot), not the official repository.**
+
+[![Fork](https://img.shields.io/badge/fork-tencent--connect%2Fdsh--qqbot-blue)](https://github.com/tencent-connect/dsh-qqbot)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/tencent-connect/dsh-qqbot)](https://github.com/tencent-connect/dsh-qqbot)
+[![GitHub stars](https://img.shields.io/github/stars/xiong-universe/qqbot)](https://github.com/xiong-universe/qqbot)
 [![QQ Bot](https://img.shields.io/badge/QQ_Bot-API_v2-red)](https://bot.q.qq.com/wiki/)
 
 <br/>
@@ -24,6 +26,23 @@ Scan to join the QQ group / channel
 
 </div>
 
+## About this fork
+
+This repository is a **community fork (secondary development)** of the official [`@tencent-connect/dsh-qqbot`](https://github.com/tencent-connect/dsh-qqbot): it keeps the upstream QQ gateway integration, SDK middleware, session management and settings panel, and continues to iterate on top of it. The package name stays `@tencent-connect/dsh-qqbot` so the DSH plugin system can recognise it, but **this fork is not published to npm** — install it from this repository (see [Method 5](#method-5-install-from-this-repository-fork)) and never mix it with the official npm package in the same profile.
+
+- **Upstream (official)**: <https://github.com/tencent-connect/dsh-qqbot> (npm: `@tencent-connect/dsh-qqbot`)
+- **This fork**: GitHub <https://github.com/xiong-universe/qqbot> ｜ Gitee <https://gitee.com/x17598923823/qq-bot>
+
+What this fork adds on top of upstream (see the [CHANGELOG](./CHANGELOG_EN.md) for the full list; whether upstream already has a given feature is decided by the official repository):
+
+- **Member persona archive (the main focus)**: rolls per-chat group/direct messages, merges one person's messages across groups and DMs by openid, auto-generates/refreshes a persona profile at a message threshold, exposes them in the "Members" settings tab with filters, and supports `/人格分析` in a group to profile a mentioned member on demand. A capture strip shows which event types the platform actually delivers (mention-only vs full group messages), so it is clear whether missing data is a platform-permission or a plugin-config issue.
+- **Voice replies (TTS)**: Alibaba Cloud Bailian Qwen-Audio realtime synthesis, with the model deciding when to speak; personas can override timbre, rate and delivery instruction, and synthesis failures fall back to text. Requires Node 22+.
+- **Plugin update tab**: detects git / npm / local installs, compares against the remote and updates in one click with HMR reload — no uninstall/reinstall.
+- **Others**: persona tool allowlist (hard constraint), identity & command permissions, long-term memory, kaomoji styles, plugin tools (solve / translate / summarize / explain / rewrite), tabbed settings panel.
+- **Build output committed**: `lib/` is tracked, so installing straight from this repository needs no local build.
+
+> **Regarding sync**: upstream fixes are merged periodically; new upstream features are not guaranteed to exist here — trust this repository's code and [CHANGELOG](./CHANGELOG_EN.md). When reporting an issue, mention that you run the fork and include the version (`/bot-version` in QQ).
+
 ## Architecture
 
 ```
@@ -34,6 +53,8 @@ QQ User → QQ WebSocket → dsh-qqbot → ctx.agents → dsh agent loop → LLM
 ```
 
 ## Installation
+
+> **Only want this fork's features? Jump to "Method 5".** Methods 1 and 2 install the official npm package, which does not include the persona archive, voice replies or other fork additions.
 
 ### Method 1: Desktop install (recommended)
 
@@ -89,9 +110,34 @@ export QQBOT_APPID="yourAppID" QQBOT_SECRET="yourAppSecret"
 npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 ```
 
+### Note on methods 1–4
+
+Methods 1 and 2 install the **official npm package**, which does not contain this fork's features; methods 3 and 4 run a local checkout, so `git clone` this repository first. To use the fork's features, install from this repository (method 5).
+
+### Method 5: Install from this repository (fork)
+
+This fork commits its build output (`lib/`), so it can be installed straight from the repository without a local build:
+
+- **Desktop**: "Plugins" in the left sidebar → "Add plugin" → enter the repository URL
+  - GitHub: `https://github.com/xiong-universe/qqbot`
+  - Gitee (faster in China): `https://gitee.com/x17598923823/qq-bot`
+- **CLI (from the repository)**:
+  ```bash
+  npx @deepseek-ai/dsh plugin --profile qqbot add https://gitee.com/x17598923823/qq-bot.git
+  ```
+- **CLI (tarball)**:
+  ```bash
+  npm pack   # produces tencent-connect-dsh-qqbot-<version>.tgz, currently 0.11.0
+  npx @deepseek-ai/dsh plugin --profile qqbot add ./tencent-connect-dsh-qqbot-0.11.0.tgz
+  ```
+
+> Uninstall the official `@tencent-connect/dsh-qqbot` first (`npx @deepseek-ai/dsh plugin --profile qqbot remove @tencent-connect/dsh-qqbot`) so the same profile never holds two instances. Run `/bot-version` in QQ to confirm the fork version is active.
+
 ## Checking for updates
 
 Upgrading no longer means uninstalling and reinstalling: the settings panel has a new "Plugin update" tab (avatar → Settings → "QQ Bot" → "Plugin update").
+
+> Fork updates follow **this repository's remote** (GitHub `xiong-universe/qqbot` / Gitee `x17598923823/qq-bot`), never the official npm package; when installed from the repository, "check for updates" compares against this fork's commits.
 
 - **Check**: the plugin reads the dependency spec from the profile and the installed reference from `pnpm-lock.yaml`, then compares against the remote — git installs compare the remote HEAD commit (`git ls-remote`), npm installs compare the registry `latest` version.
 - **One-click update**: on Desktop the host's `desktopPnpm` runs `dsh plugin --profile <name> update @tencent-connect/dsh-qqbot` (that is `pnpm update`, which re-resolves the git remote commit and rewrites the lockfile), then triggers an HMR reload so the new version takes effect immediately.

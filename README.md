@@ -4,9 +4,11 @@
 
 **基于 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) 的 QQ Bot 插件，将 DeepSeek AI 助手接入 QQ 私聊与群聊。**
 
-[![npm version](https://img.shields.io/npm/v/@tencent-connect/dsh-qqbot)](https://www.npmjs.com/package/@tencent-connect/dsh-qqbot)
+**⚠️ 本仓库是 [`@tencent-connect/dsh-qqbot`](https://github.com/tencent-connect/dsh-qqbot) 的二次开发版本（Fork），不是官方仓库。**
+
+[![Fork](https://img.shields.io/badge/fork-tencent--connect%2Fdsh--qqbot-blue)](https://github.com/tencent-connect/dsh-qqbot)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/tencent-connect/dsh-qqbot)](https://github.com/tencent-connect/dsh-qqbot)
+[![GitHub stars](https://img.shields.io/github/stars/xiong-universe/qqbot)](https://github.com/xiong-universe/qqbot)
 [![QQ Bot](https://img.shields.io/badge/QQ_Bot-API_v2-red)](https://bot.q.qq.com/wiki/)
 
 <br/>
@@ -24,6 +26,25 @@
 
 </div>
 
+## 二次开发说明
+
+本仓库是官方 [`@tencent-connect/dsh-qqbot`](https://github.com/tencent-connect/dsh-qqbot) 的**二次开发版本（Fork）**：保留上游的 QQ 接入、SDK 中间件、会话管理与设置面板能力，在此基础上继续迭代插件功能。npm 包名沿用 `@tencent-connect/dsh-qqbot` 以便 DSH 插件系统识别，但**本仓库没有发布到 npm**，安装时必须使用本仓库地址（见「[方式五：从本仓库安装](#方式五从本仓库fork安装)」），且不要与官方 npm 包混装。
+
+- **上游（官方）**：<https://github.com/tencent-connect/dsh-qqbot>（npm: `@tencent-connect/dsh-qqbot`）
+- **本仓库（二次开发）**：GitHub <https://github.com/xiong-universe/qqbot> ｜ Gitee <https://gitee.com/x17598923823/qq-bot>
+
+本仓库在上游版本之上持续迭代的主要能力（完整变更见 [CHANGELOG](./CHANGELOG.md)；上游是否已具备某项能力以官方仓库为准）：
+
+- **群友人格档案（二次开发重点）**：按会话滚动记录群聊/私聊消息，同一个人按 openid 跨群、跨私聊合并；累计发言达到阈值后自动生成/更新人格档案，设置面板「群友人格」页签可查看并筛选，群里可用 `/人格分析` 当场分析被 @ 的群友。附带采集状态条，直接显示平台实际下发的事件类型（仅 @ 消息 / 全量群消息），便于判断「记录不全」是平台权限还是插件配置问题。
+- **语音回复（TTS）**：基于阿里云百炼 Qwen-Audio 实时语音合成，由模型判断何时发语音；人格可覆盖音色、语速与情感指令，合成失败自动退回文字。需要 Node 22+。
+- **插件更新页签**：自动识别 git / npm / 本地路径安装，对比远端后一键更新并 HMR 重载，不需要卸载重装。
+- **其他能力**：人格工具白名单（硬约束）、身份识别与命令权限、长期记忆、颜文字风格、做题/翻译/总结/讲解/改写等插件工具、设置面板分区化。
+- **构建产物入库**：`lib/` 已随仓库提交，可直接从仓库安装，无需本地构建。
+
+> **关于同步**：本仓库会定期合入上游修复；上游新增的功能不保证已经出现在本仓库，请以本仓库代码与 [CHANGELOG](./CHANGELOG.md) 为准。反馈问题时请注明「二次开发版本」与版本号（可在 QQ 里发 `/bot-version` 查看），方便定位。
+
+完整功能与配置说明见下文；只关心「怎么装」可直接跳到「[方式五：从本仓库安装](#方式五从本仓库fork安装)」。
+
 ## 架构
 
 ```
@@ -34,6 +55,8 @@ QQ 用户 → QQ WebSocket → dsh-qqbot → ctx.agents → dsh agent loop → L
 ```
 
 ## 安装
+
+> **只想用本仓库（二次开发版）的功能？直接看「方式五」。** 方式一、方式二安装的是官方 npm 包，不包含本仓库新增的人格档案、语音回复等功能。
 
 ### 方式一：桌面版安装（推荐）
 
@@ -89,22 +112,34 @@ export QQBOT_APPID="你的AppID" QQBOT_SECRET="你的AppSecret"
 npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 ```
 
+### 方式一 / 二 / 三 / 四 的说明
+
+方式一、方式二安装的是**官方 npm 包**，不包含本仓库的二次开发功能；方式三、方式四使用本地源码，需要先 `git clone` 本仓库。想用本仓库的功能，推荐直接看方式五。
+
 ### 方式五：从本仓库（fork）安装
 
-本仓库是 `@tencent-connect/dsh-qqbot` 的二次开发分支，构建产物 `lib/` 已入库，直接从 GitHub 安装即可，无需本地构建：
+这是安装**二次开发版**的推荐方式。本仓库是 `@tencent-connect/dsh-qqbot` 的二次开发分支，构建产物 `lib/` 已入库，直接从仓库安装即可，无需本地构建：
 
-- **桌面版**：左侧栏「插件」→「添加插件」→ 填入仓库地址 `https://github.com/xiong-universe/qqbot`
+- **桌面版**：左侧栏「插件」→「添加插件」→ 填入仓库地址
+  - GitHub：`https://github.com/xiong-universe/qqbot`
+  - Gitee（国内更快）：`https://gitee.com/x17598923823/qq-bot`
+- **命令行（从仓库安装）**：
+  ```bash
+  npx @deepseek-ai/dsh plugin --profile qqbot add https://gitee.com/x17598923823/qq-bot.git
+  ```
 - **命令行（tarball）**：
   ```bash
-  npm pack   # 产出 tencent-connect-dsh-qqbot-0.7.0.tgz
-  npx @deepseek-ai/dsh plugin --profile qqbot add ./tencent-connect-dsh-qqbot-0.7.0.tgz
+  npm pack   # 产出 tencent-connect-dsh-qqbot-<版本号>.tgz，当前为 0.11.0
+  npx @deepseek-ai/dsh plugin --profile qqbot add ./tencent-connect-dsh-qqbot-0.11.0.tgz
   ```
 
-> 安装 fork 版前请先卸载官方 `@tencent-connect/dsh-qqbot`，避免同一 profile 内出现两份实例。
+> 安装二次开发版前请先卸载官方 `@tencent-connect/dsh-qqbot`（`npx @deepseek-ai/dsh plugin --profile qqbot remove @tencent-connect/dsh-qqbot`），避免同一 profile 内出现两份实例。安装后可用 `/bot-version` 确认运行的是本仓库版本。
 
 ## 检测与更新
 
 安装后升级不需要卸载重装：设置面板新增了「插件更新」页签（左下角头像 → 设置 →「QQ 机器人」→「插件更新」）。
+
+> 二次开发版的更新跟随**本仓库远端**（GitHub `xiong-universe/qqbot` / Gitee `x17598923823/qq-bot`），不会去拉官方 npm 包；按仓库地址安装时「检查更新」对比的就是本仓库的 commit。
 
 - **检查更新**：插件读取 profile 里的依赖写法与 `pnpm-lock.yaml` 中的已装引用，再对比远端——git 安装对比远端最新 commit（`git ls-remote`），npm 安装对比 registry 的 `latest` 版本。
 - **一键更新**：桌面版通过宿主 `desktopPnpm` 执行 `dsh plugin --profile <name> update @tencent-connect/dsh-qqbot`（内部即 `pnpm update`，会重新解析 git 远端 commit 并改写 lockfile），完成后自动触发 HMR 重载，新版本立即生效。
