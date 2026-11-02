@@ -556,6 +556,8 @@ function PersonaCaptureStatus({ stats }: { stats: PersonaArchiveStatsWire }): Re
     createElement('p', { className: 'imqb2-capture-hint' },
       stats.groupFullMessages
         ? '机器人能收到群内全量消息（GROUP_MESSAGE_CREATE），群友未 @ 机器人的发言也会进档案。'
+          + '记录范围不影响回复范围：只要「对话设置 → 群聊仅回复 @机器人的消息」保持开启（默认），'
+          + '这些消息只入档、不会被逐条回复。'
         : '当前平台只推送被 @ 机器人的群消息（GROUP_AT_MESSAGE_CREATE），群友未 @ 机器人的发言不会到达插件，'
           + '所以档案里只有被 @ 时的那几条。开通私域 / 全量群消息权限后会自动收到 GROUP_MESSAGE_CREATE。'),
   );
@@ -1705,7 +1707,8 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
   const conversationPanel: ReactNode[] = [
     createElement(SwitchRow, {
       label: '群聊仅回复 @机器人的消息', checked: form.requireMention ?? true,
-      help: '开启后，机器人仅可回复 @机器人的群聊消息',
+      help: '开启后，机器人仅可回复 @机器人的群聊消息；即使开通了全量群消息权限，未 @ 的发言也只进档案、不回复。'
+        + '关闭后群内每条消息都会触发回复（消耗额度、可能刷屏），请谨慎操作',
       onChange: (v) => { patch('requireMention', v); },
     }),
     createElement(SwitchRow, {
