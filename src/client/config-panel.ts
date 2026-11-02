@@ -934,7 +934,11 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
         const body = (await res.json().catch(() => ({}))) as UpdateStateWire;
         if (stopped) return;
         if (body.install !== undefined) setUpdateInfo(body.install);
-        else setUpdateError(body.error ?? `读取安装信息失败（HTTP ${res.status}）`);
+        else if (res.status === 404) {
+          // 服务端没有 /update 路由 = 在跑的插件进程比面板旧（升级后没重启 DSH 的典型症状）：
+          // 面板由磁盘上的 lib/client.js 提供，服务端代码却还是进程启动时加载的那份
+          setUpdateError('插件服务端仍在跑旧代码（找不到更新接口）。请完全退出并重启 DSH（不是只关窗口）后重试。');
+        } else setUpdateError(body.error ?? `读取安装信息失败（HTTP ${res.status}）`);
       })
       .catch((err: unknown) => {
         if (!stopped) setUpdateError(err instanceof Error ? err.message : String(err));
