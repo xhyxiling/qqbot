@@ -245,6 +245,28 @@ describe('listPersonaProfileViews', () => {
     expect(row.chats.every((chat) => chat.scope === 'group')).toBe(true);
   });
 
+  it('响应带上档案采集统计（供面板解释「只记录到 @ 消息」）', () => {
+    const { archive, store, config } = setup();
+    archive.noteEvent('GROUP_AT_MESSAGE_CREATE');
+    archive.noteSkip('bot');
+
+    const response = listPersonaProfileViews(config, {}, { archive, store });
+    expect(response.archive).toMatchObject({
+      chatCount: 2,
+      messageCount: 38,
+      memberCount: 2,
+      eventTypes: { GROUP_AT_MESSAGE_CREATE: 1 },
+      groupFullMessages: false,
+      skipped: { bot: 1, slashCommand: 0, empty: 0, other: 0 },
+    });
+  });
+
+  it('档案未启用时不返回采集统计', () => {
+    const { store, config } = setup({ enabled: false });
+    const response = listPersonaProfileViews(config, {}, { store });
+    expect(response.archive).toBeUndefined();
+  });
+
   it('同一 openid 的群聊与私聊合并成一行，并保留两种会话', () => {
     const archive = makeArchive([
       { chat: personaArchiveKey('app', 'group', 'g1'), senderId: 'u1', senderName: '小明', count: 10 },

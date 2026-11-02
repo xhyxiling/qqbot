@@ -139,11 +139,36 @@ export interface PersonaProfileQuery {
   offset?: number;
 }
 
+/** 档案采集统计（面板诊断「平台到底下发了什么」） */
+export interface PersonaArchiveStatsWire {
+  /** 已归档会话数（群 + 私聊） */
+  chatCount: number;
+  /** 已归档消息条数 */
+  messageCount: number;
+  /** 档案里的群友数（按 openid 去重） */
+  memberCount: number;
+  /** 最近一次成功写入的时间（毫秒） */
+  lastArchivedAt?: number;
+  /** 各入站事件类型的累计次数（如 GROUP_AT_MESSAGE_CREATE / C2C_MESSAGE_CREATE） */
+  eventTypes: Record<string, number>;
+  /**
+   * 是否收到过 GROUP_MESSAGE_CREATE（群内全量消息）。
+   *
+   * 普通群机器人平台只下发 GROUP_AT_MESSAGE_CREATE（被 @ 的群消息），
+   * 该字段为 false 就说明「群友未 @ 的发言」平台根本没推送。
+   */
+  groupFullMessages: boolean;
+  /** 被跳过的入站消息计数（按原因） */
+  skipped: Record<'bot' | 'slashCommand' | 'empty' | 'other', number>;
+}
+
 /** 群友人格列表响应 */
 export interface PersonaProfilesResponse {
   ok: boolean;
   profiles: PersonaProfileWire[];
   /** 过滤后的总条数（分页前） */
   total: number;
+  /** 档案采集统计（档案未启用时缺省） */
+  archive?: PersonaArchiveStatsWire;
   error?: string;
 }

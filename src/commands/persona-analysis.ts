@@ -20,6 +20,7 @@ import {
 } from '../features/persona-analysis-tool.ts';
 import { analyzeSenderProfile, loadSenderChats } from '../features/persona-analyzer.ts';
 import { formatProfileMarkdown, displayName, shortId } from '../features/persona-profile-analysis.ts';
+import type { PersonaArchiveStatsWire } from '../shared/bind-protocol.ts';
 import type { ModelRoute } from '../features/model-route.ts';
 import type { CommandDeps, CategorizedCommand } from './types.ts';
 
@@ -89,8 +90,31 @@ function safeAttr(text: string): string {
   return text.replace(/["<>\r\n]/g, ' ').trim();
 }
 
+/**
+ * 采集范围提示：说清「为什么档案里只有 @ 机器人的消息」。
+ *
+ * 普通群机器人只能收到 `GROUP_AT_MESSAGE_CREATE`（被 @ 的群消息），
+ * 群友没 @ 机器人的发言由平台决定是否下发；收到过 `GROUP_MESSAGE_CREATE`
+ * 才说明机器人有全量群消息权限。
+ */
+export function captureHint(stats: PersonaArchiveStatsWire): string {
+  if (stats.groupFullMessages) {
+    return '机器人已收到群内全量消息事件（GROUP_MESSAGE_CREATE），群友未 @ 机器人的发言也会进档案。';
+  }
+  return '当前平台只推送 @ 机器人的群消息（GROUP_AT_MESSAGE_CREATE），群友未 @ 机器人的发言采不到；'
+    + '开通私域 / 全量群消息权限后，平台会额外推送 GROUP_MESSAGE_CREATE，届时会自动补全。';
+}
+
+/** 采集统计一行（条数 + 会话 + 群友） */
+function captureSummary(stats: PersonaArchiveStatsWire): string {
+  return `档案已有 ${stats.messageCount} 条 · ${stats.memberCount} 位群友 · ${stats.chatCount} 个会话`;
+}
+
 /** 没有指定对象时的用法提示（附活跃群友的快捷入口） */
-function buildUsageMarkdown(targets: readonly AnalysisTarget[]): string {
+function buildUsageMarkdown(
+  targets: readonly AnalysisTarget[],
+  stats: PersonaArchiveStatsWire,
+): string {
   const lines = [
     '### 🧭 人格分析用法',
     '',
@@ -112,7 +136,13 @@ function buildUsageMarkdown(targets: readonly AnalysisTarget[]): string {
       lines.push('', `_（只列出前 ${shown.length} 位，共 ${targets.length} 位）_`);
     }
   }
-  lines.push('', '> 档案只记录机器人运行期间（功能开启后）的发言，新群友要先聊几句。');
+  lines.push(
+    '',
+    `**采集情况**：${captureSummary(stats)}`,
+    '',
+    `> ${captureHint(stats)}`,
+    '> 档案只记录机器人运行期间（功能开启后）的发言，新群友要先聊几句。',
+  );
   return lines.join('\n');
 }
 
@@ -135,9 +165,14 @@ export function personaAnalysisCommand(deps: CommandDeps): CategorizedCommand {
       }
 
       const { archive, profiles, llm } = services;
+      const stats = archive.stats();
       const members = archive.membersAll();
       if (members.length === 0) {
-        return '还没有归档的聊天记录。档案只从功能开启后开始积累，先在群里聊一段时间再试。';
+        return [
+          '还没有归档的聊天记录。档案只从功能开启后开始积累，先在群里聊一段时间再试。',
+          '',
+          `> ${captureHint(stats)}`,
+        ].join('\n');
       }
 
       const mention = pickMentionedMember(
@@ -151,7 +186,12 @@ export function personaAnalysisCommand(deps: CommandDeps): CategorizedCommand {
       if (mention !== undefined) {
         const hit = members.find((member) => member.senderId === mention.senderId);
         if (hit === undefined) {
-          return `⚠️ 档案里还没有 @ 的这位群友的发言。\n只在机器人运行、档案开启之后的发言会被记录，先让 TA 聊两句再试。`;
+          return [
+            '⚠️ 档案里还没有 @ 的这位群友的发言。',
+            '只在机器人运行、档案开启之后的发言会被记录，先让 TA 聊两句再试。',
+            '',
+            `> ${captureHint(stats)}`,
+          ].join('\n');
         }
         target = memberToTarget(hit);
       } else if (arg !== '') {
@@ -176,7 +216,7 @@ export function personaAnalysisCommand(deps: CommandDeps): CategorizedCommand {
           .map(memberToTarget);
         await sendMarkdownChunked(
           cmdCtx,
-          buildUsageMarkdown(scoped),
+          buildUsageMarkdown(scoped, stats),
           deps.config.textChunkLimit,
         );
         return { kind: 'noop' as const };

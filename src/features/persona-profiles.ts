@@ -377,6 +377,8 @@ export function listPersonaProfileViews(
     ok: true,
     total: filtered.length,
     profiles: filtered.slice(offset, offset + limit),
+    // 采集统计（含各事件类型次数）：面板据此解释「只记录到 @ 消息」的原因
+    ...(archive !== undefined ? { archive: archive.stats() } : {}),
   };
 }
 

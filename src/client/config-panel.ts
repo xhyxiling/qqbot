@@ -23,6 +23,7 @@ import {
   BIND_CONFIG_PATH,
   BIND_PERSONAS_PATH,
   BIND_UPDATE_PATH,
+  type PersonaArchiveStatsWire,
   type PersonaProfileWire,
   type PersonaProfilesResponse,
   type UpdateCheckWire,
@@ -158,7 +159,7 @@ type ConfigWire = {
 
 /** 样式注入标记（幂等；版本变化时替换旧样式，避免客户端热更新后仍用旧样式） */
 const STYLE_ID = 'im-qqbot-config-panel-styles';
-const STYLE_VERSION = '8';
+const STYLE_VERSION = '9';
 
 /** DSW 通用设置风格（settings-form / Switch / SegmentedControl 原语复刻） */
 function useConfigPanelStyles(): void {
@@ -394,6 +395,12 @@ function useConfigPanelStyles(): void {
   display: flex; flex-direction: column; gap: 6px; padding: 8px 0 4px;
   font-size: 12px; line-height: 1.6; color: var(--dsw-alias-label-secondary);
 }
+.imqb2-capture {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 8px 10px; margin-bottom: 8px; border-radius: 8px;
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+.imqb2-capture-hint { flex-basis: 100%; margin: 0; font-size: 12px; line-height: 1.6; color: var(--dsw-alias-label-tertiary); }
 .imqb2-detail-title { font-weight: 600; color: var(--dsw-alias-label-primary); }
 .imqb2-detail-row { display: flex; gap: 6px; }
 .imqb2-detail-key { flex: none; width: 76px; color: var(--dsw-alias-label-tertiary); }
@@ -518,6 +525,42 @@ function chatSummary(profile: PersonaProfileWire): string {
   return parts.length > 0 ? parts.join(' · ') : String(profile.chatCount);
 }
 
+/**
+ * 采集状态条（表格上方）：归档规模 + 平台实际下发的群事件类型。
+ *
+ * QQ 官方只向普通群机器人推送被 @ 的群消息，未 @ 的发言根本不会到达插件；
+ * 这里把「只收到 @ 事件」直接标出来，用户不会误以为是自己配置漏记。
+ */
+function PersonaCaptureStatus({ stats }: { stats: PersonaArchiveStatsWire }): ReactNode {
+  const events = Object.entries(stats.eventTypes)
+    .filter(([, count]) => count > 0)
+    .slice(0, 4)
+    .map(([type, count]) => `${type} ×${count}`);
+  const parts = [
+    `已归档 ${stats.messageCount} 条`,
+    `${stats.memberCount} 位群友`,
+    `${stats.chatCount} 个会话`,
+    stats.lastArchivedAt !== undefined ? `最近 ${formatShortTime(stats.lastArchivedAt)}` : '',
+  ].filter((part) => part !== '');
+  return createElement('div', { className: 'imqb2-capture' },
+    createElement('span', { className: 'imqb2-table-meta' }, parts.join(' · ')),
+    events.length > 0
+      ? createElement('span', { className: 'imqb2-table-meta' }, `平台下发：${events.join('、')}`)
+      : null,
+    stats.groupFullMessages
+      ? createElement('span', { className: 'imqb2-chip imqb2-chip--trait' }, '全量群消息')
+      : createElement('span', {
+          className: 'imqb2-chip imqb2-chip--warn',
+          title: '平台只下发被 @ 机器人的群消息（GROUP_AT_MESSAGE_CREATE）',
+        }, '仅 @ 消息'),
+    createElement('p', { className: 'imqb2-capture-hint' },
+      stats.groupFullMessages
+        ? '机器人能收到群内全量消息（GROUP_MESSAGE_CREATE），群友未 @ 机器人的发言也会进档案。'
+        : '当前平台只推送被 @ 机器人的群消息（GROUP_AT_MESSAGE_CREATE），群友未 @ 机器人的发言不会到达插件，'
+          + '所以档案里只有被 @ 时的那几条。开通私域 / 全量群消息权限后会自动收到 GROUP_MESSAGE_CREATE。'),
+  );
+}
+
 /** 一行卡的详情（展开后展示结构化分析结果） */
 function PersonaProfileDetail({ profile }: { profile: PersonaProfileWire }): ReactNode {
   const rows: Array<{ key: string; value: ReactNode }> = [
@@ -564,6 +607,7 @@ function PersonaProfilesTable({ archived }: { archived: boolean }): ReactNode {
   const [trait, setTrait] = useState('');
   const [query, setQuery] = useState({ name: '', openid: '', trait: '' });
   const [profiles, setProfiles] = useState<PersonaProfileWire[]>([]);
+  const [archiveStats, setArchiveStats] = useState<PersonaArchiveStatsWire | null>(null);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -598,6 +642,7 @@ function PersonaProfilesTable({ archived }: { archived: boolean }): ReactNode {
         }
         setProfiles(Array.isArray(body.profiles) ? body.profiles : []);
         setTotal(typeof body.total === 'number' ? body.total : 0);
+        setArchiveStats(body.archive ?? null);
       })
       .catch((err: unknown) => {
         if (!stopped) setError(err instanceof Error ? err.message : String(err));
@@ -688,6 +733,7 @@ function PersonaProfilesTable({ archived }: { archived: boolean }): ReactNode {
         onClick: () => { setRefreshKey((key) => key + 1); },
       }, loading ? '刷新中…' : '刷新'),
     ),
+    archiveStats !== null ? createElement(PersonaCaptureStatus, { stats: archiveStats }) : null,
     createElement('div', { className: 'imqb2-filters' },
       filterInput('按昵称筛选', name, setName),
       filterInput('按 openid 筛选', openid, setOpenid),
@@ -1648,9 +1694,11 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
         })
       : null,
     createElement('p', { className: 'imqb2-hint', style: { padding: '0 0 8px' } },
-      '档案只从开启后开始积累：QQ 官方接口不提供任意群的历史消息，机器人未上线期间的消息无法补录。'
-      + '同一个 openid 在多个群/私聊的发言会合并成一份档案；'
-      + '设置面板的表格可按昵称、openid、人格特点筛选，分析结果也可作为后续新增人格的参考。'),
+      '采集范围：QQ 官方只向普通群机器人推送被 @ 的群消息（GROUP_AT_MESSAGE_CREATE），'
+      + '群友没 @ 机器人的发言平台不会下发；开通私域 / 全量群消息权限后还会收到 GROUP_MESSAGE_CREATE，'
+      + '届时群内每条发言都会进档案。另外官方不提供任意群的历史消息，机器人未上线期间的消息无法补录。'
+      + '同一个 openid 在多个群/私聊的发言会合并成一份档案；表格可按昵称、openid、人格特点筛选，'
+      + '分析结果也可作为后续新增人格的参考。'),
     createElement(PersonaProfilesTable, { archived: personaAnalysis.enabled }),
   ];
 

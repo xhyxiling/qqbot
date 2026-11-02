@@ -138,6 +138,51 @@ describe('PersonaArchive', () => {
     expect(() => new PersonaArchive({ path, writeDelayMs: 0 })).not.toThrow();
   });
 
+  it('stats 汇总会话/消息/群友/最近写入与采集事件', () => {
+    const archive = makeArchive();
+    const group = personaArchiveKey('app', 'group', 'g1');
+    const c2c = personaArchiveKey('app', 'c2c', 'u1');
+    const now = Date.now();
+    archive.append(group, { senderId: 'u1', content: 'a', timestamp: now });
+    archive.append(group, { senderId: 'u2', content: 'b', timestamp: now + 1000 });
+    archive.append(c2c, { senderId: 'u1', content: 'c', timestamp: now + 500 });
+
+    archive.noteEvent('GROUP_AT_MESSAGE_CREATE');
+    archive.noteEvent('GROUP_AT_MESSAGE_CREATE');
+    archive.noteEvent('C2C_MESSAGE_CREATE');
+    archive.noteSkip('slashCommand');
+
+    const stats = archive.stats();
+    expect(stats.chatCount).toBe(2);
+    expect(stats.messageCount).toBe(3);
+    expect(stats.memberCount).toBe(2);
+    expect(stats.lastArchivedAt).toBe(now + 1000);
+    expect(stats.eventTypes).toEqual({ GROUP_AT_MESSAGE_CREATE: 2, C2C_MESSAGE_CREATE: 1 });
+    expect(stats.groupFullMessages).toBe(false);
+    expect(stats.skipped).toEqual({ bot: 0, slashCommand: 1, empty: 0, other: 0 });
+  });
+
+  it('收到全量群消息事件后 groupFullMessages 为 true', () => {
+    const archive = makeArchive();
+    archive.noteEvent('GROUP_MESSAGE_CREATE');
+    expect(archive.stats().groupFullMessages).toBe(true);
+  });
+
+  it('采集统计落盘后重载保留（重启后仍可诊断平台下发范围）', () => {
+    const path = join(dir, 'capture.json');
+    const first = new PersonaArchive({ path, writeDelayMs: 0 });
+    first.noteEvent('GROUP_MESSAGE_CREATE');
+    first.noteEvent('GROUP_AT_MESSAGE_CREATE');
+    first.noteSkip('bot');
+    first.flush();
+
+    const reloaded = new PersonaArchive({ path, writeDelayMs: 0 });
+    const stats = reloaded.stats();
+    expect(stats.groupFullMessages).toBe(true);
+    expect(stats.eventTypes).toEqual({ GROUP_AT_MESSAGE_CREATE: 1, GROUP_MESSAGE_CREATE: 1 });
+    expect(stats.skipped).toEqual({ bot: 1, slashCommand: 0, empty: 0, other: 0 });
+  });
+
   it('members 按消息量降序统计', () => {
     const archive = makeArchive();
     const key = personaArchiveKey('app', 'group', 'g1');
@@ -329,5 +374,55 @@ describe('createPersonaArchiveMiddleware', () => {
 
     expect(notices).toHaveLength(1);
     expect(notices[0]).toMatchObject({ senderId: 'u1', scope: 'group', peerId: 'g1' });
+  });
+
+  it('记录入站事件类型与跳过原因，便于诊断「平台只下发 @ 消息」', async () => {
+    const archive = makeArchive();
+    const middleware = createPersonaArchiveMiddleware(config, archive, makeLogger());
+
+    await middleware(
+      makeCtx({
+        rawEventType: 'GROUP_AT_MESSAGE_CREATE',
+        kind: 'group', senderId: 'u1', groupOpenid: 'g1', messageId: 'm1', content: '今天好热',
+      }),
+      async () => {},
+    );
+    await middleware(
+      makeCtx({
+        rawEventType: 'GROUP_AT_MESSAGE_CREATE',
+        kind: 'group', senderId: 'u2', groupOpenid: 'g1', content: '/new',
+      }),
+      async () => {},
+    );
+    await middleware(
+      makeCtx({
+        rawEventType: 'GROUP_AT_MESSAGE_CREATE',
+        kind: 'group', senderId: 'u2', groupOpenid: 'g1', content: 'hi', senderIsBot: true,
+      }),
+      async () => {},
+    );
+
+    const stats = archive.stats();
+    expect(stats.eventTypes).toEqual({ GROUP_AT_MESSAGE_CREATE: 3 });
+    expect(stats.groupFullMessages).toBe(false);
+    expect(stats.skipped).toEqual({ bot: 1, slashCommand: 1, empty: 0, other: 0 });
+    expect(stats.messageCount).toBe(1);
+  });
+
+  it('收到 GROUP_MESSAGE_CREATE（未 @ 的群消息）时照常归档', async () => {
+    const archive = makeArchive();
+    const middleware = createPersonaArchiveMiddleware(config, archive, makeLogger());
+
+    await middleware(
+      makeCtx({
+        rawEventType: 'GROUP_MESSAGE_CREATE',
+        kind: 'group', senderId: 'u1', senderName: '小明', groupOpenid: 'g1', content: '随便说一句',
+      }),
+      async () => {},
+    );
+
+    expect(archive.stats().groupFullMessages).toBe(true);
+    expect(archive.list(personaArchiveKey('app', 'group', 'g1')).map((item) => item.content))
+      .toEqual(['随便说一句']);
   });
 });

@@ -214,6 +214,19 @@ describe('personaAnalysisCommand', () => {
     expect(result).toEqual({ kind: 'noop' });
     expect(sent[0]).toContain('人格分析用法');
     expect(sent[0]).toContain('text="/人格分析 u1"');
+    // 采集范围要说清楚：普通群机器人只能收到 @ 机器人的群消息
+    expect(sent[0]).toContain('档案已有 9 条 · 2 位群友 · 1 个会话');
+    expect(sent[0]).toContain('GROUP_AT_MESSAGE_CREATE');
+    expect(sent[0]).toContain('GROUP_MESSAGE_CREATE');
+  });
+
+  it('收到全量群消息事件时提示覆盖全量发言', async () => {
+    const deps = makeDeps();
+    deps.persona!.archive.noteEvent('GROUP_MESSAGE_CREATE');
+    const { ctx, sent } = makeCtx({ groupOpenid: 'g1' });
+
+    await getHandler(deps)(ctx);
+    expect(sent[0]).toContain('全量消息事件');
   });
 
   it('没有 @ 时退回昵称匹配', async () => {
