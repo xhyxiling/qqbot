@@ -93,6 +93,13 @@ export class VoiceSpeaker {
 
     const persona = this.manager.getEffectivePersona(record.scope, record.peerId);
     const tuning = resolveVoiceTuning(this.settings, persona?.expressions?.voice);
+    const personaVoice = persona?.expressions?.voice?.voice?.trim();
+    if (personaVoice !== undefined && personaVoice !== '' && tuning.voice !== personaVoice) {
+      // 人格音色与当前模型不兼容时会被换成该模型的缺省音色：不说一声，用户只会觉得「声线变了」
+      this.logger.warn(
+        `im-qqbot: 人格音色 ${personaVoice} 不被模型 ${this.settings.model} 支持，本轮改用 ${tuning.voice}`,
+      );
+    }
     // 单轮语气 > 人格 > 全局；再统一追加「像发微信语音、不要播音腔」的口语提示，
     // 否则静态的朗读指令会把每一句都念成同一种播报腔
     const instruction = buildSpeechInstruction(
@@ -113,7 +120,15 @@ export class VoiceSpeaker {
         timeoutMs: this.settings.timeoutMs,
       });
     } catch (err) {
-      this.logger.warn(`im-qqbot: 语音合成失败，本轮改为发送文字: ${err instanceof Error ? err.message : String(err)}`);
+      const reason = err instanceof Error ? err.message : String(err);
+      // AccessDenied = 账号/API Key 没有这个模型的权限点；ModelNotFound = 模型 id 写错或未开通。
+      // 这两种退化在 QQ 端只表现为「说好发语音却发了文字」，日志里得能一眼看出来。
+      const hint = /AccessDenied/i.test(reason)
+        ? '（请到阿里云百炼控制台，给这个 API Key 勾选该语音模型的权限点）'
+        : /ModelNotFound/i.test(reason)
+          ? '（模型 id 不存在或账号未开通该模型）'
+          : '';
+      this.logger.warn(`im-qqbot: 语音合成失败，本轮改为发送文字: ${reason}${hint}`);
       return false;
     }
 

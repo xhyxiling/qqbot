@@ -167,6 +167,17 @@ describe('resolveVoiceTuning', () => {
     expect(resolveVoiceTuning(settings31, { voice: 'vd-custom' })).toEqual({ voice: 'vd-custom' });
   });
 
+  it('人格音色不被当前模型支持时回落到该模型缺省音色（避免整轮退回文字）', () => {
+    const plus = resolveVoiceSettings(voiceConfig({
+      model: 'qwen-audio-3.1-tts-plus',
+      voice: 'longanlingxin_v3.1',
+    }))!;
+    expect(resolveVoiceTuning(plus, { voice: 'longwan_v3.1' })).toEqual({ voice: 'longanlingxin_v3.1' });
+    // 复刻/设计音色例外：跨代仍可合成，保持原 id
+    const clone = 'qwen-audio-3.0-tts-plus-vd-bailian-5e1b01d';
+    expect(resolveVoiceTuning(plus, { voice: clone })).toEqual({ voice: clone });
+  });
+
   it('情感指令：人格覆盖全局，人格留空则沿用全局', () => {
     const withInstruction = resolveVoiceSettings(voiceConfig({
       instruction: '请用元气满满、语速稍快的语气',

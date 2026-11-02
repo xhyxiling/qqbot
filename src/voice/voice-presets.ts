@@ -198,6 +198,29 @@ export function resolveVoicePresetForModel(id: string | undefined, model?: strin
   return mapped;
 }
 
+/**
+ * 合成前最后一道「音色 ↔ 模型」校验（**只动内置系统音色**）。
+ *
+ * `resolveVoicePresetForModel` 只处理有同名跨代映射的音色；这里补上另一半：
+ * 内置音色若当前模型根本不支持（`longwan_v3.1` 配 3.1-plus、`longanlingxi`
+ * 配 3.1-flash…），服务端会回 `Engine error [411]`，调用方只能退回文字。
+ * 与其静默降级成文字，不如换成该模型的缺省音色——至少语音发得出去。
+ *
+ * 复刻/设计音色（`vd-...`）与未知模型（`cosyvoice-v2` 等）一律原样返回：
+ * 没有可确认的兼容矩阵，不能替用户换声线。
+ */
+export function ensureVoiceForModel(id: string | undefined, model?: string): string {
+  const modelId = model?.trim() || DEFAULT_VOICE_MODEL;
+  const target = id?.trim() ?? '';
+  if (target === '') return defaultVoiceForModel(modelId);
+  // 未知模型（cosyvoice-v2 等）没有可确认的兼容矩阵：原样返回，不替用户换声线
+  if (findVoiceModel(modelId) === undefined) return target;
+  const resolved = resolveVoicePresetForModel(target, modelId);
+  const preset = findVoicePreset(resolved);
+  if (preset === undefined) return resolved;
+  return preset.models.includes(modelId) ? resolved : defaultVoiceForModel(modelId);
+}
+
 /** 取某模型可用的预设（模型留空时按默认模型处理） */
 export function voicePresetsForModel(model: string | undefined): VoicePreset[] {
   const target = model?.trim() || VOICE_PRESET_MODEL;

@@ -234,7 +234,7 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 |------|------|--------|------|
 | `voice.enabled` | boolean | `true` | 语音总开关；关闭后即使已保存 API Key 也不注册工具、不合成、不发语音（默认开启，兼容旧配置） |
 | `voice.apiKey` | string | `''` | DashScope API Key；**留空 = 无法启用语音**（面板保存时留空表示保持已保存的 Key；要停用语音请用 `enabled` 开关，不需要清除 Key） |
-| `voice.model` | string | `qwen-audio-3.1-tts-flash` | 语音合成模型 id，需在百炼控制台开通对应模型；面板为下拉（3.1 / 3.0 的 flash、plus），其他模型手动填 id |
+| `voice.model` | string | `qwen-audio-3.1-tts-flash` | 语音合成模型 id，需在百炼控制台开通对应模型**并给 API Key 勾选该模型的权限点**；面板为下拉（3.1 / 3.0 的 flash、plus），其他模型手动填 id |
 | `voice.voice` | string | `longanfengyue_v3.1` | 默认音色 id；音色 id 与模型代际绑定，人格可用 `expressions.voice.voice` 覆盖 |
 | `voice.instruction` | string | `''` | 情感/语气指令（自然语言，≤400 字）：可写成「场景 + 逐句走向」，见下文；人格可用 `expressions.voice.instruction` 覆盖 |
 | `voice.presets` | array | `[]` | 自定义音色清单（`{ name, voice }`，≤20 条）；面板下拉里**排在内置系统音色之前**，后加的排在更上方 |
@@ -245,6 +245,8 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 
 - **模型决定、语音替换文字**：语音启用时会给模型注入一段「语音回复」说明（order 88），模型判断需要语音（「说句话」「发条语音」「想听你说话」「唱首歌」、晚安安慰撒娇这类短句）就调用 `qqbot_voice`，随后写的回复正文只用于合成，不再作为文字消息发送——不会出现「先发文字又发一遍语音」。
 - **失败自动退回文字**：鉴权失败、模型未开通、网络超时或清洗后没有可朗读内容时，本轮改发原来的文字，消息不会丢；临时音频写入 `~/.dsh-qqbot/media` 并在发送后删除。
+- **API Key 要勾选模型权限点**：百炼的 Key 只带「已选权限点」里列出的模型。给 Key 勾选 3.1-TTS 之前，`qwen-audio-3.1-tts-*` 会返回 `AccessDenied`，QQ 端表现就是「明明调了 `qqbot_voice` 却收到文字」。日志里会写明原因（`语音合成失败…AccessDenied（请到阿里云百炼控制台，给这个 API Key 勾选该语音模型的权限点）`），去百炼「API Key → 已选权限点」勾上对应模型即可。
+- **音色与模型不匹配时自动兜底**：人格或全局写了当前模型不支持的内置系统音色（如 3.1-plus 配 `longwan_v3.1`），合成前会换成该模型的缺省音色并打一条 warn，而不是让整轮退回文字；克隆/设计音色不做替换。
 - **按人格音色**：`personas[].expressions.voice` 可覆盖全局音色、语速/音量与情感指令，切换人格后下一条语音即生效；模型还可在单轮调用里写「场景 + 逐句走向」（如「场景：夜里她叫住学长，楼道很静；第1句：声音很轻、带一点迟疑…」），仅本轮生效。语音提示词要求模型**每次调用都写场景与逐句走向**，避免所有语音都是同一种默认腔调。
 - **自动清洗**：代码块、URL、Markdown 符号、`|||` 分隔符与颜文字不会念出来；`|||` 与换行都按句号断句，句末自动补标点，朗读才有正常换气和收尾。
 - **运行时要求**：使用 Node 22+ 内置 WebSocket；Node 20 环境即使填了 Key 也会在启动日志里告警并关闭语音。
@@ -258,7 +260,7 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 - **切模型会同步修正音色**：内置同名音色跨代改写（`longanfengyue` ↔ `longanfengyue_v3.1`），目标模型不支持的内置音色回落到该模型的缺省音色，人格里的覆盖音色也一起改；克隆/设计音色不会自动改（会提示需要重新克隆）。
 - **选音色会同步模型**：在「默认音色」里选到标注「需 xxx 模型」的音色时，面板会自动把「语音模型」切到该模型，避免选完必然合成失败。
 
-音色 id 与模型**代际**绑定：3.1 音色一律带 `_v3.1` 后缀，3.0 旧 id 不能用在 3.1 上（会报 `InvalidParameter` / `Engine error [411]`），反之亦然。
+音色 id 与模型**代际**绑定：3.1 的**系统音色**一律带 `_v3.1` 后缀，3.0 的系统音色 id 不能用在 3.1 上（会报 `InvalidParameter` / `Engine error [411]`），反之亦然。
 
 
 **3.1 系统音色（默认模型 `qwen-audio-3.1-tts-flash`）**
@@ -311,7 +313,7 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 
 - **模型与音色的代际必须一致**（2026-11 官方音色表）：`qwen-audio-3.1-tts-flash` 支持上表全部 26 个 3.1 音色；`qwen-audio-3.1-tts-plus` 只支持 4 个旗舰音色（`longanfengyue_v3.1` / `longanlingxin_v3.1` / `longanhuan_v3.1` / `xunanchuan_v3.1`）以及 3.1 的复刻/设计音色；`qwen-audio-3.0-tts-plus` 只支持 `longanlingxi`、`longanhuan_v3.6`。下拉里**仍会列出全部内置音色**，当前模型不支持的项目标注「需 xxx 模型」；选中后「语音模型」会自动切到该模型。
 - **切换代际时内置音色的同名自动映射**：把模型从 3.0 改到 3.1（或反过来）时，`longanfengyue` ↔ `longanfengyue_v3.1` 这类同名内置音色会自动换成当前代际的 id；目标模型不支持的内置音色（如 3.1-plus 只有 4 个旗舰、`longwan_v3.1` 切回 3.0）回落到该模型的缺省音色。复刻/设计音色**不会**自动改 id。
-- **克隆/设计音色不能跨代**：`qwen-audio-3.0-tts-plus-vd-bailian-<哈希>` 这类 id 只在其创建时使用的代际下有效。切到 3.1 后需要**在 3.1 模型下重新克隆/设计**，或直接改用上面的 3.1 系统音色；面板对不在清单里的音色会给出警告。
+- **克隆/设计音色可跨代使用，但不保证**：实测 `qwen-audio-3.0-tts-plus-vd-bailian-<哈希>` 在 `qwen-audio-3.1-tts-flash` / `3.1-plus` 上仍能合成成功（2026-11），所以插件不会强行改写这类 id；官方未承诺跨代兼容，升级代际后建议先发一条试听，音色走样再回 3.1 模型下重新克隆，或直接改用上面的 3.1 系统音色。
 - 其他 MaaS 模型（`cosyvoice-v2` 等）通过「语音模型」下拉里的「其他模型 id（手动输入）」填写；这类模型没有可确认的兼容矩阵，内置系统音色不会列出，只能使用「自定义音色」，需要自行确认该模型支持的音色 id。
 - 声音复刻/声音设计的专属音色 id 通过「自定义音色」添加（名称 + 音色 id），不要求出现在内置预设里；同一后缀在 plus / flash 间共享，但**不跨代际共享**。
 

@@ -456,8 +456,8 @@ function VoiceSelectField({ label, value, placeholder, help, options, onChange }
           `当前音色只支持 ${mismatch}，与现用语音模型不匹配，合成会失败；请把「语音模型」改成 ${mismatch}。`),
     unknown
       ? createElement('p', { className: 'imqb2-hint-warn' },
-          '当前音色不在内置清单中：若它是另一代（3.0 / 3.1）语音模型下创建的音色，合成会失败；'
-          + '请换成当前模型代际的音色，或在新代际下重新克隆。')
+          '当前音色不在内置清单中（多半是复刻/设计音色）：它绑定在创建时的账号与模型上，'
+          + '换代际后通常仍可合成，若失败请回到原代际模型，或在当前代际重新克隆。')
       : null,
     help === undefined ? null : createElement('p', { className: 'imqb2-hint' }, help),
   );
@@ -574,7 +574,7 @@ function VoicePresetListField({ value, onChange }: {
       onClick: () => { onChange([{ name: '', voice: '' }, ...value]); },
     }, '＋ 添加音色'),
     createElement('p', { className: 'imqb2-hint' },
-      '这里填的是你自己的声音复刻 / 声音设计音色 id（与账号和模型代际绑定：3.1 模型要用 3.1 下创建的音色），'
+      '这里填的是你自己的声音复刻 / 声音设计音色 id（绑定在创建它的账号上；旧代际的音色在 3.1 模型下通常也能用，但官方未承诺），'
       + '下拉里排在内置系统音色之前；留空的音色 id 保存时会被丢弃。'),
   );
 }
@@ -1382,7 +1382,7 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
       help: '当前只内置 Qwen-Audio-TTS 的 3.1 / 3.0 模型（其他模型走「其他模型 id」手动输入）。'
         + '切换模型会自动修正内置系统音色：同名音色跨代改写（longanfengyue ↔ longanfengyue_v3.1），'
         + '目标模型不支持的内置音色回落到该模型缺省音色；人格里的音色也会跟着改。'
-        + '克隆/设计音色不会自动改，需在新代际下重新创建后填入「自定义音色」。',
+        + '克隆/设计音色不会自动改（面板无法判断其兼容性）；合成失败时日志会写明原因。',
       onChange: (v) => { applyVoiceModel(v); },
     }),
     createElement(VoiceSelectField, {

@@ -10,6 +10,7 @@ import {
   VOICE_PRESET_MODEL_PLUS,
   buildVoiceOptions,
   defaultVoiceForModel,
+  ensureVoiceForModel,
   findVoiceModel,
   findVoicePreset,
   followVoiceModel,
@@ -174,6 +175,31 @@ describe('VOICE_MODELS（模型下拉清单）', () => {
     expect(findVoiceModel('  ')).toBeUndefined();
     expect(findVoiceModel(undefined)).toBeUndefined();
     expect(findVoiceModel('cosyvoice-v2')).toBeUndefined();
+  });
+});
+
+describe('ensureVoiceForModel（合成前的音色校验）', () => {
+  it('空音色按模型取缺省值', () => {
+    expect(ensureVoiceForModel('', VOICE_PRESET_MODEL)).toBe(DEFAULT_VOICE_ID);
+    expect(ensureVoiceForModel(undefined, VOICE_PRESET_MODEL_PLUS)).toBe('longanlingxin_v3.1');
+  });
+
+  it('内置音色受支持时保持原 id（含同名跨代映射）', () => {
+    expect(ensureVoiceForModel('longanlingxin_v3.1', VOICE_PRESET_MODEL_PLUS)).toBe('longanlingxin_v3.1');
+    expect(ensureVoiceForModel('longanfengyue', VOICE_PRESET_MODEL)).toBe('longanfengyue_v3.1');
+  });
+
+  it('内置音色不被目标模型支持时回落到该模型缺省音色（避免 411 后整轮退回文字）', () => {
+    expect(ensureVoiceForModel('longwan_v3.1', VOICE_PRESET_MODEL_PLUS)).toBe('longanlingxin_v3.1');
+    // 3.0 的 longanlingxi 切到 3.1-flash：先做同名映射（新代际支持），不回落
+    expect(ensureVoiceForModel('longanlingxi', VOICE_PRESET_MODEL)).toBe('longanlingxi_v3.1');
+    expect(ensureVoiceForModel('longanlingxin_v3.1', VOICE_PRESET_MODEL_30_FLASH)).toBe('longanfengyue');
+  });
+
+  it('克隆/设计音色与未知模型原样返回', () => {
+    const clone = 'qwen-audio-3.0-tts-plus-vd-bailian-5e1b01d';
+    expect(ensureVoiceForModel(clone, VOICE_PRESET_MODEL_PLUS)).toBe(clone);
+    expect(ensureVoiceForModel('longanfengyue_v3.1', 'cosyvoice-v2')).toBe('longanfengyue_v3.1');
   });
 });
 

@@ -17,8 +17,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### 🔧 Changed
 
-- **Timbres are labelled by generation and mapped by name**: 3.1 ids always carry the `_v3.1` suffix and cannot be mixed with 3.0 ids. When switching model generations, built-in same-name timbres (`longanfengyue` ↔ `longanfengyue_v3.1`) are rewritten to the target generation; if the mapped id is unsupported by the target model the plugin falls back to that model's default timbre. Clone/design ids are **never** rewritten. 3.0 timbres and models are still supported, so existing configs with 3.0 cloned voices keep working.
+- **Timbres are labelled by generation and mapped by name**: 3.1 ids always carry the `_v3.1` suffix and cannot be mixed with 3.0 ids. When switching model generations, built-in same-name timbres (`longanfengyue` ↔ `longanfengyue_v3.1`) are rewritten to the target generation; if the mapped id is unsupported by the target model the plugin falls back to that model's default timbre. Clone/design ids are **never** rewritten. 3.0 timbres and models are still supported, so existing configs with 3.0 cloned voices keep working. Cloned voices were verified to still synthesize on 3.1 models, so the docs and panel no longer claim a re-clone is required after upgrading.
 - "Clear saved key" is now purely key management; voice is started/stopped by the switch. While the switch is off no `qqbot_voice` tool is registered, nothing is synthesized, no voice is sent and no quota is consumed.
+
+### 🐛 Fixed
+
+- **"`qqbot_voice` was called but a text message arrived"**: the usual cause is that the Bailian API key's selected permission points do not include the TTS model, so synthesis is refused and the whole turn falls back to text. Synthesis failures now log an actionable hint: `AccessDenied` → "grant this voice model to the API key in the Alibaba Cloud Bailian console", `ModelNotFound` → "the model id does not exist or is not activated for this account". A runtime timbre guard was also added: if a persona or the global setting uses a **built-in** system timbre the current model does not support (e.g. `qwen-audio-3.1-tts-plus` with `longwan_v3.1`), it is swapped for that model's default timbre with a warning instead of degrading the whole turn to text; clone/design ids are left untouched.
 
 ## [0.11.0] - 2026-10-31
 

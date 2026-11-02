@@ -16,7 +16,7 @@ import {
   type PersonaVoiceConfig,
   type VoiceConfig,
 } from '../config.ts';
-import { resolveVoicePresetForModel } from './voice-presets.ts';
+import { ensureVoiceForModel } from './voice-presets.ts';
 import { isSpeechWebSocketAvailable } from './tts.ts';
 
 /** 解析后的语音设置（apiKey 已去空白，数值已收敛到合法范围） */
@@ -117,8 +117,8 @@ export function buildSpeechInstruction(base?: string): string {
  * 行为不变，想停用语音时关开关即可，不需要清除 Key。
  *
  * 模型/音色为空时回落到缺省值，避免面板里清空后合成直接失败。
- * 音色与模型代际不一致时只修正内置系统音色的同名 id（3.0 ↔ 3.1）：
- * 例如模型是 3.0-flash、音色却物化成了 3.1 的缺省值，这里换回 3.0 同名音色；
+ * 音色与模型不兼容时只修正内置系统音色：先做 3.0 ↔ 3.1 的同名映射，再检查该
+ * 模型是否支持这个音色（不支持就用该模型的缺省音色），避免选完必然合成失败。
  * 复刻/设计音色保持原样，不会静默换成别的声线。
  */
 export function resolveVoiceSettings(voice: VoiceConfig | undefined): ResolvedVoiceSettings | undefined {
@@ -127,7 +127,7 @@ export function resolveVoiceSettings(voice: VoiceConfig | undefined): ResolvedVo
   if (apiKey === '') return undefined;
 
   const model = voice?.model?.trim() || DEFAULT_VOICE_MODEL;
-  const voiceId = resolveVoicePresetForModel(voice?.voice, model);
+  const voiceId = ensureVoiceForModel(voice?.voice, model);
   const baseUrl = voice?.baseUrl?.trim();
   const workspace = voice?.workspace?.trim();
   const instruction = normalizeVoiceInstruction(voice?.instruction);
@@ -170,6 +170,10 @@ export interface VoiceTuning {
 /**
  * 解析本轮语音参数：人格音色覆盖全局音色，语速/音量只在人格里显式配置时生效。
  * 非法数值一律忽略（交给服务端缺省值）；情感指令同理——人格没写就沿用全局。
+ *
+ * 人格音色同样过一遍「音色 ↔ 模型」校验：人格里写了一个当前模型不支持的
+ * 内置音色（例如 3.1-plus 里配了 `longwan_v3.1`），合成会被服务端拒绝、
+ * 整轮退回文字；换成该模型缺省音色至少还能把语音发出去。
  */
 export function resolveVoiceTuning(
   settings: ResolvedVoiceSettings,
@@ -181,7 +185,7 @@ export function resolveVoiceTuning(
   const instruction = normalizeVoiceInstruction(persona?.instruction) ?? settings.instruction;
   return {
     voice: personaVoice !== undefined && personaVoice !== ''
-      ? resolveVoicePresetForModel(personaVoice, settings.model)
+      ? ensureVoiceForModel(personaVoice, settings.model)
       : settings.voice,
     ...(typeof rate === 'number' && Number.isFinite(rate)
       ? { rate: Math.min(MAX_VOICE_RATE, Math.max(MIN_VOICE_RATE, rate)) }
