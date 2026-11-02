@@ -130,6 +130,7 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 | `personas` | array | `[]` | 人格预设列表（QQ 端 `/persona` 切换，可配置 `tools` 工具白名单），见下文 |
 | `defaultPersona` | string | `''` | 默认人格 id，留空表示不启用人格 |
 | `voice` | object | 见下文 | 出站语音（TTS）：**`enabled` 关闭或 `apiKey` 留空即关闭语音功能**，见下文 |
+| `personaAnalysis` | object | 见下文 | 群友人格档案：按会话记录消息，达阈值自动分析并可手动调用 `qqbot_analyze_persona`，只存本机，见下文 |
 | `textChunkLimit` | number | `4500` | 单条消息最大字符数 |
 | `streaming` | boolean | `true` | 是否启用流式输出（群聊始终不启用） |
 | `replySplitMode` | `none`/`delimiter`/`line`/`paragraph` | `none` | 回复拆分方式：`delimiter` 按固定分隔符 `|||` 拆（推荐；只要出现分隔符，段内剩余换行也按分条处理），`none` 只按长度切分，`line` 每个换行发一条，`paragraph` 按空行分段。开启后自动关闭流式输出 |
@@ -195,7 +196,7 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
   - 颜文字库在 `src/expressions/kaomoji.ts`，按情绪分组；后续表情包（图片）会在同一 `expressions` 容器下新增 `sticker`，人格配置形态不变。
 - `expressions.voice`：**该人格的语音音色**（可选）。`voice` 覆盖全局音色，`rate`（0.5–2）与 `volume`（0–100）可选，`instruction` 覆盖全局情感/语气指令（留空继承全局）；语音功能本身由全局 `voice.enabled` 与 `voice.apiKey` 控制，留空时这里配置也不生效。示例：`expressions: { voice: { voice: longanfengyue_v3.1, rate: 1.1, instruction: 请用清冷克制的语气 } }`。
 - **工具权限是硬约束，不是提示词**：QQ 会话在运行时通过 `tools.restrict({ allow })` 限制模型可见的工具，白名单之外的工具模型根本看不到、调不到（宿主 preset 里的文件读写、命令执行、子 agent、定时任务等一律被挡掉）。
-  - 不写 `tools`（缺省）：使用**默认放行清单**——7 个插件内置工具（`qqbot_solve`、`qqbot_describe_image`、`qqbot_send_file`、`qqbot_translate`、`qqbot_summarize`、`qqbot_explain`、`qqbot_rewrite`）+ `ask_user_question` + 只读的 `web_search` / `web_fetch`。
+  - 不写 `tools`（缺省）：使用**默认放行清单**——8 个插件内置工具（`qqbot_solve`、`qqbot_describe_image`、`qqbot_send_file`、`qqbot_translate`、`qqbot_summarize`、`qqbot_explain`、`qqbot_rewrite`、`qqbot_analyze_persona`）+ `ask_user_question` + 只读的 `web_search` / `web_fetch`。
   - `tools: []`：该人格没有任何工具能力（不能做题、看图、发文件、翻译/总结，也不能联网）。
   - 人格写的 `tools` 与默认清单**求交**：默认清单之外的名字（如 `read`、`write`、`pwsh`、`bash`）不会生效，日志会告警「配置了默认不开放的工具（已禁用）」；未注册的名字会被忽略。
   - 例外：语音启用时 `qqbot_voice` 始终放行（语音是投递方式而不是一项能力），即使人格写了 `tools: []` 也能用语音回复。
@@ -385,6 +386,39 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 - **注入内容**：认识天数、互动次数、关系阶段与要点清单，并要求模型只在相关话题时自然提起、不复述清单、不编造未记录的内容。
 - 可在 QQ 端用 `/memory` 查看和管理（仅管理员），也可在设置面板「记忆与关系」页签调整开关与条数。
 
+### 群聊人格档案与群友分析（personaAnalysis）
+
+按会话滚动保存群聊/私聊消息，既能自动为累计发言达到阈值的群友生成人格档案，也能用 `qqbot_analyze_persona` 手动分析指定的人；同一个人在不同群/私聊的发言会合并成一份档案。
+
+```yaml
+- id: im-qqbot
+  config:
+    personaAnalysis:
+      enabled: true          # 关闭后不再记录新消息，工具调用时返回「未启用」提示
+      maxMessages: 300       # 每个会话最多保留的消息条数（20–1000）
+      retentionDays: 30      # 消息保留天数（1–365），超期记录在加载/写入时清理
+      autoAnalyze: true      # 累计发言达到阈值后自动分析（关闭则只保留手动工具）
+      autoAnalyzeThreshold: 20  # 自动分析触发条数（5–200）
+```
+
+| 配置 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `personaAnalysis.enabled` | boolean | `true` | 是否记录群聊/私聊消息；关闭后停止写入（已有档案保留） |
+| `personaAnalysis.maxMessages` | number | `300` | 每个会话最多保留的消息条数（20–1000），超出淘汰最旧 |
+| `personaAnalysis.retentionDays` | number | `30` | 消息保留天数（1–365），超期记录在加载与写入时清理 |
+| `personaAnalysis.autoAnalyze` | boolean | `true` | 是否自动分析（累计发言 ≥ 阈值时触发） |
+| `personaAnalysis.autoAnalyzeThreshold` | number | `20` | 自动分析触发条数（5–200）；已有档案时，新增条数 ≥ 阈值才会更新 |
+
+- **数据只在本机**：发言档案写在 `~/.dsh-qqbot/persona-archive.json`，分析结果写在 `~/.dsh-qqbot/persona-profiles.json`，都不会上传到任何地方；删除这两个文件即可清空全部记录。
+- **为什么需要本地档案**：QQ 官方没有「拉取任意群历史消息」的接口，入站历史缓冲也只保留最近 `historyLimit` 条且在每次回复后清空，无法支撑长期总结。所以只能记录机器人运行期间、功能开启之后的消息，无法回溯上线前的历史。
+- **跨群合并**：只按平台下发的 openid 聚合（实测同一个人在私聊与群聊拿到的 openid 相同），因此不同群、群聊与私聊的发言会合并成一份档案；若某个会话下发的 openid 不同则单独成档。不同 openid 即使昵称相同也不会合并（不按昵称猜测身份）。
+- **记录时机**：访问控制之后、@ 门控之前，因此未 @bot 的群消息也会记录；被访问控制拒绝的群/用户、机器人自己的消息、斜杠命令与空内容不会写入。
+- **自动分析**：某人累计发言首次达到 `autoAnalyzeThreshold` 时自动生成档案，之后每新增「阈值」条再更新一次；任务串行执行（同一人不会重复排队），失败后冷却 10 分钟重试，超时 120 秒中断。自动分析不会阻塞消息回复。
+- **手动分析口径**：不指定群友时分析当前会话消息量最高的一位；指定昵称或 openid 时精确匹配（再按 openid 前缀、昵称包含兜底），匹配到多人会要求补充 openid。system prompt 强制只依据记录说话、区分事实与推测、样本 <30 条标注「样本偏少」、<5 条不做性格判断，不猜隐私、不做心理/医学诊断。
+- **结构化结果**：模型输出一句话印象（summary）、性格特点（traits）、说话风格（style）、口头禅（catchphrases）、兴趣（interests）、群内角色（role）、相处建议（advice）与置信度（confidence），既用于展示，也可作为后续新增人格预设的素材。
+- 在群里 @机器人 说「分析一下某某的性格」即可；也可直接说「分析群里最活跃的人」。
+- 设置面板「群友人格」页签可调整开关、条数、保留天数、自动分析阈值，并查看人格表格；表格支持按**昵称 / openid / 人格特点**筛选，点击昵称可展开完整档案。
+
 ### 访问控制（access）
 
 | 配置 | 类型 | 默认值 | 说明 |
@@ -489,7 +523,13 @@ src/
 ├── features/                   # 交互特性
 │   ├── question-channel.ts     # ask_user_question 问答通道
 │   ├── approval-channel.ts     # approval 审批确认通道
-│   └── answer-parser.ts        # 答案解析
+│   ├── answer-parser.ts        # 答案解析
+│   ├── persona-archive.ts      # 群聊人格档案（~/.dsh-qqbot/persona-archive.json + 归档中间件）
+│   ├── persona-profile-analysis.ts # 结构化人格 prompt / JSON 解析 / Markdown 渲染
+│   ├── persona-analyzer.ts     # 单人分析编排（跨会话聚合 + 模型调用）
+│   ├── persona-auto-analyzer.ts # 达到阈值后的自动分析队列（串行 / 冷却 / 超时）
+│   ├── persona-profiles.ts     # 分析结果存储（persona-profiles.json）与面板筛选视图
+│   └── persona-analysis-tool.ts # qqbot_analyze_persona 群友人格分析
 ├── media/                      # 多媒体
 │   ├── vision-tool.ts          # 图片视觉理解
 │   ├── send-file-tool.ts       # 发送本地文件
@@ -517,6 +557,7 @@ sessionKey: `qqbot:${appId}:${scope}:${peerId}`，新会话铸造 UUID 会话 id
 - **会话隔离** — 每个 QQ 私聊用户/群聊各一个独立 Agent
 - **Preset 支持** — 可通过 `agent-presets` 服务挂载预设（工具集、prompt 等）
 - **长期记忆** — 按会话保存互动次数、关系阶段与要点（`memory.json`），`/new` 与重启都不清除
+- **群友人格分析** — 按会话保存滚动聊天档案（`persona-archive.json`），累计发言达阈值自动生成/更新人格档案（`persona-profiles.json`），也可用 `qqbot_analyze_persona` 手动分析；设置面板可按昵称/openid/特点筛选
 - **闲置回收** — 超时自动 dispose Agent，防止内存泄漏
 - **Markdown 输出** — 回复以 Markdown 格式发送，支持代码块/表格感知切分
 - **图片理解** — 支持 `qqbot_describe_image` 视觉理解，可分析用户发送的图片

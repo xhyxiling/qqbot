@@ -10,6 +10,7 @@ import { ConfigSchema, type ImQQBotConfig } from './config.ts';
 import { bootstrapGateway } from './gateway/index.ts';
 import type { DshAgentRegistry } from './session/index.ts';
 import { getProfileDir, resolveEnv } from './shared/index.ts';
+import { listPersonaProfileViews } from './features/persona-profiles.ts';
 import { ensureCredentials, persistCredentialsToProfile, registerBoundCredentialRoutes } from './setup/index.ts';
 import { listToolNames, type ToolsRestrictServiceLike } from './personas/persona-tools.ts';
 import type { Logger } from './types.ts';
@@ -57,6 +58,7 @@ export async function apply(ctx: Context, config: ImQQBotConfig): Promise<void> 
       logger,
       config: { ...config },
       availableTools: () => listHostToolNames(ctx),
+      listPersonaProfiles: (query) => listPersonaProfileViews(config, query),
     })
       .then((credentials): void => {
         if (!credentials) {
@@ -94,8 +96,12 @@ export async function apply(ctx: Context, config: ImQQBotConfig): Promise<void> 
     return;
   }
 
-  // 已绑定：注册常驻路由（状态回显 + 手动编辑/更换凭据 + 配置编辑）
-  registerBoundCredentialRoutes(ctx, logger, appId, { ...config }, () => listHostToolNames(ctx));
+  // 已绑定：注册常驻路由（状态回显 + 手动编辑/更换凭据 + 配置编辑 + 群友人格列表）
+  registerBoundCredentialRoutes(
+    ctx, logger, appId, { ...config },
+    () => listHostToolNames(ctx),
+    (query) => listPersonaProfileViews(config, query),
+  );
 
   const resolvedConfig: ImQQBotConfig = { ...config, appId, appSecret };
 

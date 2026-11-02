@@ -10,6 +10,9 @@
 
 ### ✨ 新功能
 
+- **群友人格档案（自动 + 手动）**：机器人按会话滚动保存群聊/私聊消息（本地 `~/.dsh-qqbot/persona-archive.json`）。某人累计发言达到阈值后**自动**生成/更新人格档案（结果存 `~/.dsh-qqbot/persona-profiles.json`）；也可在群里 @机器人 说「分析一下某某的性格」手动触发 `qqbot_analyze_persona`。**同一个人在不同群、群聊与私聊的发言会按 openid 合并**成一份档案。档案包含一句话印象、性格特点、说话风格、口头禅、兴趣、群内角色、相处建议与置信度，按结构化 JSON 保存，后续可直接作为新增人格预设的素材。
+- **群友人格配置（`personaAnalysis`）**：`enabled`（默认 `true`）/ `maxMessages`（默认 300，20–1000）/ `retentionDays`（默认 30，1–365）/ `autoAnalyze`（默认 `true`）/ `autoAnalyzeThreshold`（默认 20，5–200）。首次达到阈值时分析，之后每新增「阈值」条再更新一次；任务串行执行、同一人不重复排队，失败冷却 10 分钟、单次超时 120 秒，不阻塞消息回复。档案只存本机、不上传，关闭后停止记录新消息（已有档案保留，删除文件即可清空）。记录发生在访问控制之后、@ 门控之前，因此未 @bot 的群消息也会计入；机器人自己的消息、斜杠命令与空内容不记录。
+- **设置面板新增「群友人格」页签**：可调整档案开关、条数、保留天数、自动分析开关与触发条数，并查看现有人格档案表格；表格支持按**昵称 / openid / 人格特点**筛选，点击昵称展开完整档案（说话风格、口头禅、兴趣、群内角色、相处建议、置信度与覆盖会话数）。
 - **升级到 Qwen-Audio-3.1 TTS（默认模型 `qwen-audio-3.1-tts-flash`）**：语音默认模型切到阿里云百炼 3.1 代 TTS（实时 WebSocket 协议不变，`sample_rate` / `mp3` 与旧版一致），内置音色同步扩充为 3.1 的 26 个系统音色（含 4 个 `qwen-audio-3.1-tts-plus` 旗舰音色 `longanfengyue_v3.1` / `longanlingxin_v3.1` / `longanhuan_v3.1` / `xunanchuan_v3.1`）。缺省音色改为 `longanfengyue_v3.1`。
 - **插件检测升级与一键更新**：设置面板新增「插件更新」页签，自动识别当前安装方式（git / npm / 本地路径）并读取 profile 里已装的引用。git 安装对比远端最新 commit（`git ls-remote`），npm 安装对比 registry 的 `latest`；发现新版本时可直接点「立即更新」，桌面版通过宿主 `desktopPnpm` 执行 `dsh plugin --profile <name> update @tencent-connect/dsh-qqbot`（即 `pnpm update`，会重新解析 git 远端 commit），完成后自动 HMR 重载，**不需要再卸载重装**。CLI 或宿主没有 pnpm 服务时页签会给出可直接复制的命令；`file:` / `link:` 本地路径安装、`--patch` 源码直载与固定 commit 的依赖会明确提示不支持自更新及原因。
 - **语音总开关（`voice.enabled`，默认 `true`）**：语音现在需要「开关打开 + 已填写 API Key」两个条件才生效。要暂停语音直接关闭设置面板顶部的「启用语音回复」开关即可，Key 会保留，不用再靠清除 Key 来停用；重新打开立即恢复。旧配置未写 `enabled` 时按开启处理，已有 Key 的用户升级后行为不变。

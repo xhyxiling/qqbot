@@ -26,6 +26,11 @@ import { startMediaCleanup } from '../media/media-cleaner.ts';
 import { ensureVisionInputModal, registerDescribeImageTool } from '../media/vision-tool.ts';
 import { registerSolveTool } from '../features/solve-tool.ts';
 import { registerTextTools } from '../features/text-tools.ts';
+import { getPersonaArchive } from '../features/persona-archive.ts';
+import { getPersonaProfileStore } from '../features/persona-profiles.ts';
+import { PersonaAutoAnalyzer } from '../features/persona-auto-analyzer.ts';
+import type { LlmRuntimeLike } from '../features/model-route.ts';
+import { registerPersonaAnalysisTool } from '../features/persona-analysis-tool.ts';
 import { registerSendFileTool, type MediaSenderLike } from '../media/send-file-tool.ts';
 import { DeliverablesDeliverer } from '../transport/deliverables.ts';
 import { createVoiceSpeaker } from '../voice/voice-reply.ts';
@@ -69,8 +74,47 @@ export async function bootstrapGateway(
   } as ConstructorParameters<typeof QQBot>[0]);
   logger.info(`QQBot SDK initialized (UA: ${userAgent})`);
 
+  // ── 群聊人格档案与人格库（qqbot_analyze_persona / 自动分析的数据源）──
+  // 关闭时既不记录也不分析；工具仍注册，调用时给出明确的「未启用」提示。
+  // 档案与人格库都走进程内共享实例：设置面板路由与网关同进程，重复 new
+  // 会各自持有内存副本并互相覆盖写盘。
+  const personaArchive = config.personaAnalysis.enabled
+    ? getPersonaArchive({
+        maxMessages: config.personaAnalysis.maxMessages,
+        retentionDays: config.personaAnalysis.retentionDays,
+        debugLog: (msg) => logger.debug(msg),
+      })
+    : undefined;
+  const profileStore = personaArchive === undefined
+    ? undefined
+    : getPersonaProfileStore({ debugLog: (msg) => logger.debug(msg) });
+
+  let llm: LlmRuntimeLike | undefined;
+  try {
+    llm = ctx.get('llm') as LlmRuntimeLike | undefined;
+  } catch {
+    llm = undefined;
+  }
+
+  const autoAnalyzer = personaArchive !== undefined && profileStore !== undefined && llm?.stream !== undefined
+    ? new PersonaAutoAnalyzer({
+        archive: personaArchive,
+        store: profileStore,
+        manager,
+        config,
+        llm,
+        logger,
+      })
+    : undefined;
+  if (personaArchive !== undefined && config.personaAnalysis.autoAnalyze !== false && autoAnalyzer === undefined) {
+    logger.warn('im-qqbot: llm 服务不可用，自动人格分析未启用（可手动调用 qqbot_analyze_persona）');
+  }
+
   // ── 中间件链 ──
-  setupMiddlewares(bot, config, manager, logger);
+  setupMiddlewares(
+    bot, config, manager, logger, personaArchive,
+    autoAnalyzer === undefined ? undefined : (notice) => autoAnalyzer.notify(notice),
+  );
 
   // ── 入站：经过中间件链后的消息交给 dsh agent ──
   bot.on('message', async (mCtx: MiddlewareContext) => {
@@ -212,6 +256,9 @@ export async function bootstrapGateway(
   // ── 实用小工具注册（翻译 / 总结 / 讲解 / 改写，同样走会话当前模型） ──
   registerTextTools(ctx, manager, config, logger);
 
+  // ── 群友人格分析（qqbot_analyze_persona，按本地群聊档案总结） ──
+  registerPersonaAnalysisTool(ctx, { manager, config, archive: personaArchive, profiles: profileStore, logger });
+
   // ── 附件发送工具注册（qqbot_send_file，发送器见上方 mediaSender） ──
   registerSendFileTool(ctx, mediaSender, manager, config, logger);
 
@@ -225,6 +272,10 @@ export async function bootstrapGateway(
 
       return async () => {
         logger.info('Shutting down');
+        // 写盘是 1s 防抖的，退出前补一次，避免最后一条消息/分析结果丢失
+        autoAnalyzer?.dispose();
+        personaArchive?.flush();
+        profileStore?.flush();
         await manager.disposeAll();
         bot.stop();
       };

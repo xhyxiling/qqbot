@@ -117,6 +117,7 @@ Upgrading no longer means uninstalling and reinstalling: the settings panel has 
 | `personas` | array | `[]` | Persona presets (switchable via `/persona` in QQ, each with an optional `tools` whitelist) |
 | `defaultPersona` | string | `''` | Default persona id; empty disables personas |
 | `voice` | object | see below | Outbound voice (TTS): **voice is disabled when `enabled` is off or `apiKey` is empty**, see below |
+| `personaAnalysis` | object | see below | Member persona archive: stores per-chat messages, auto-analyzes at a threshold and supports `qqbot_analyze_persona`; local only, see below |
 | `textChunkLimit` | number | `4500` | Max chars per message |
 | `streaming` | boolean | `true` | Enable streaming output (always disabled in groups) |
 | `replySplitMode` | `none`/`delimiter`/`line`/`paragraph` | `none` | Reply split mode: `delimiter` splits at the fixed `|||` delimiter (recommended; once a delimiter appears, leftover newlines in a segment also split); splitting disables streaming |
@@ -164,7 +165,7 @@ Split the single prompt into several switchable personas, each with its own tool
   - The library lives in `src/expressions/kaomoji.ts`; future sticker (image) support will add a `sticker` field to the same `expressions` container without changing the persona shape.
 - `expressions.voice`: **the persona's voice timbre** (optional). `voice` overrides the global timbre, `rate` (0.5–2) / `volume` (0–100) are optional, and `instruction` overrides the global emotion/tone instruction (empty inherits the global value). Voice replies themselves are gated by the global `voice.enabled` switch and `voice.apiKey`; nothing here takes effect unless both are set. Example: `expressions: { voice: { voice: longanfengyue_v3.1, rate: 1.1, instruction: 请用清冷克制的语气 } }`.
 - `tools` is a **hard** runtime constraint: the persona's agent calls `tools.restrict({ allow })`, so tools outside the whitelist are not even visible to the model (not just discouraged by the prompt).
-  - Omit `tools` to use the **default allowlist**: the 7 plugin tools (`qqbot_solve`, `qqbot_describe_image`, `qqbot_send_file`, `qqbot_translate`, `qqbot_summarize`, `qqbot_explain`, `qqbot_rewrite`) plus `ask_user_question` and read-only `web_search` / `web_fetch`.
+  - Omit `tools` to use the **default allowlist**: the 8 plugin tools (`qqbot_solve`, `qqbot_describe_image`, `qqbot_send_file`, `qqbot_translate`, `qqbot_summarize`, `qqbot_explain`, `qqbot_rewrite`, `qqbot_analyze_persona`) plus `ask_user_question` and read-only `web_search` / `web_fetch`.
   - `tools: []` disables all tools for that persona.
   - Persona tool names are intersected with the default allowlist: host tools such as `read`, `write`, `pwsh`, `bash` are never granted (a warning is logged), and unknown names are ignored.
   - Exception: while voice is enabled `qqbot_voice` is always allowed (voice is a delivery mode, not a capability), so even a persona with `tools: []` can reply with voice.
@@ -349,6 +350,39 @@ Per-chat memory of what was said and how the relationship has progressed, stored
 - The injected section contains days known, interaction count, relationship stage and the notes, with instructions to mention them naturally, never recite the list, and never invent unrecorded facts.
 - Manage it with `/memory` in QQ (admins only), or edit the switches and note limit in the "Memory & Relationship" tab of the settings panel.
 
+### Group persona archive & member analysis (personaAnalysis)
+
+Rolling per-chat archive of group/direct messages. It automatically builds a persona profile once a member's message count reaches the threshold, and `qqbot_analyze_persona` can profile a specific member on demand. Everything the same openid said across groups and direct chats is merged into one profile.
+
+```yaml
+- id: im-qqbot
+  config:
+    personaAnalysis:
+      enabled: true          # keep recording messages; when off, tool calls report "not enabled"
+      maxMessages: 300       # max retained messages per chat (20–1000)
+      retentionDays: 30      # retention window in days (1–365), pruned on load/write
+      autoAnalyze: true      # analyze automatically once the threshold is reached
+      autoAnalyzeThreshold: 20  # trigger after this many messages (5–200)
+```
+
+| Config | Type | Default | Description |
+|------|------|--------|------|
+| `personaAnalysis.enabled` | boolean | `true` | Whether to record group/direct messages; turning it off stops new writes (existing archive is kept) |
+| `personaAnalysis.maxMessages` | number | `300` | Max retained messages per chat (20–1000); oldest are evicted |
+| `personaAnalysis.retentionDays` | number | `30` | Retention window in days (1–365); expired entries are pruned on load and write |
+| `personaAnalysis.autoAnalyze` | boolean | `true` | Enable automatic analysis when the member reaches the threshold |
+| `personaAnalysis.autoAnalyzeThreshold` | number | `20` | Trigger threshold (5–200); an existing profile is refreshed only after this many new messages |
+
+- **Local only**: messages live in `~/.dsh-qqbot/persona-archive.json`, analysis results in `~/.dsh-qqbot/persona-profiles.json`; nothing is uploaded, delete both files to erase everything.
+- **Why a local archive**: the QQ OpenAPI does not expose arbitrary group history, and the inbound history buffer only keeps the last `historyLimit` messages and is cleared after every reply, so it cannot support long-term summaries. Only messages received while the bot is running (after enabling the feature) can be recorded.
+- **Cross-chat merge**: grouped purely by the platform-issued openid (in practice the same person gets the same openid in direct chats and groups), so messages from different groups and DMs end up in a single profile; if some chat issues a different openid it becomes its own profile. Different openids are never merged even with identical nicknames.
+- **When messages are recorded**: after access control and before the @ mention gate, so group messages that do not mention the bot are recorded too; rejected chats/users, the bot's own messages, slash commands and empty content are skipped.
+- **Automatic analysis**: the first time a member reaches `autoAnalyzeThreshold` a profile is generated; afterwards it is refreshed each time another `threshold` messages arrive. Jobs run serially (one per member at a time), failures cool down for 10 minutes, and a run is aborted after 120 seconds. It never blocks replies.
+- **Manual analysis policy**: without a member it profiles the most active member of the current chat; with a nickname or openid it matches exactly (then openid prefix, then nickname substring) and asks for an openid when the match is ambiguous. The system prompt requires evidence-based statements, separates facts from inferences, labels samples under 30 messages as "small sample", does not judge personality under 5 messages, and never guesses private facts or gives psychological/medical diagnoses.
+- **Structured output**: one-line summary, traits, speaking style, catchphrases, interests, group role, advice and confidence — used for display today and as raw material for new persona presets later.
+- Mention the bot in a group and ask "analyze X's personality", or "analyze the most active member here".
+- The "Members" (群友人格) tab in the settings panel exposes the switches, message limit, retention days, auto-analysis threshold, and a profile table filterable by **nickname / openid / personality trait**; click a nickname to expand the full profile.
+
 ### Access control (access)
 
 | Config | Type | Default | Description |
@@ -442,7 +476,13 @@ src/
 ├── features/                   # Interaction features
 │   ├── question-channel.ts     # ask_user_question Q&A channel
 │   ├── approval-channel.ts     # approval confirmation channel
-│   └── answer-parser.ts        # Answer parsing
+│   ├── answer-parser.ts        # Answer parsing
+│   ├── persona-archive.ts      # Group persona archive (~/.dsh-qqbot/persona-archive.json + middleware)
+│   ├── persona-profile-analysis.ts # Structured prompt / JSON parsing / Markdown rendering
+│   ├── persona-analyzer.ts     # Single-member analysis (cross-chat aggregation + model call)
+│   ├── persona-auto-analyzer.ts # Threshold-triggered queue (serial / cooldown / timeout)
+│   ├── persona-profiles.ts     # Analysis store (persona-profiles.json) + panel filter view
+│   └── persona-analysis-tool.ts # qqbot_analyze_persona member analysis
 ├── media/                      # Media
 │   ├── vision-tool.ts          # Image vision understanding
 │   ├── send-file-tool.ts       # Send local files
@@ -470,6 +510,7 @@ Resolution strategy: in-process reuse → persisted resume → fresh create.
 - **Session isolation** — one independent Agent per QQ direct user / group
 - **Preset support** — mount presets (toolkits, prompts, etc.) via the `agent-presets` service
 - **Idle eviction** — auto-dispose Agents on timeout to prevent memory leaks
+- **Member persona analysis** — a rolling per-chat archive (`persona-archive.json`) auto-builds/refreshes profiles (`persona-profiles.json`) once a member reaches the message threshold, and `qqbot_analyze_persona` profiles members on demand; the settings panel filters by nickname/openid/trait
 - **Markdown output** — replies sent as Markdown with code-block/table-aware chunking
 - **Image understanding** — supports `qqbot_describe_image` vision to analyze images sent by users
 - **Problem solving** — supports `qqbot_solve` to solve exam/homework problems (question text or screenshot, using the session's current model) and returns a fixed answer + worked-steps layout

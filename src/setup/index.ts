@@ -14,6 +14,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { Logger } from '../types.ts';
+import type { PersonaProfileQuery, PersonaProfilesResponse } from '../shared/bind-protocol.ts';
 import { BindingService } from './binding-service.ts';
 import { registerBindRoutes, type UpdateRouteHooks, type WebServerLike } from './bind-routes.ts';
 import { createBrowserPresenter, createTerminalPresenter, isDesktopHost } from './presenters.ts';
@@ -37,6 +38,8 @@ export interface EnsureCredentialsOptions {
   config: Record<string, unknown>;
   /** 宿主此刻可用的工具名（config 路由 GET 时求值；面板下拉用） */
   availableTools?: () => string[];
+  /** 群友人格列表（设置面板「群友人格」页签） */
+  listPersonaProfiles?: (query: PersonaProfileQuery) => PersonaProfilesResponse;
 }
 
 /**
@@ -99,6 +102,7 @@ export async function ensureCredentials(
       },
       currentConfig: () => options.config,
       availableTools: options.availableTools,
+      listPersonaProfiles: options.listPersonaProfiles,
       update: createUpdateHooks(ctx, logger),
     });
     // 回调作用域（服务卸载/替换、插件卸载）连带注销路由
@@ -122,6 +126,7 @@ export function registerBoundCredentialRoutes(
   appId: string,
   config: Record<string, unknown>,
   availableTools?: () => string[],
+  listPersonaProfiles?: (query: PersonaProfileQuery) => PersonaProfilesResponse,
 ): void {
   (ctx as unknown as {
     inject(deps: readonly string[], callback: (scoped: Context) => void): unknown;
@@ -133,6 +138,7 @@ export function registerBoundCredentialRoutes(
       onManualCredentials: (credentials) => persistCredentials(credentials, logger),
       currentConfig: () => config,
       availableTools,
+      listPersonaProfiles,
       update: createUpdateHooks(ctx, logger),
     });
     (scoped as unknown as { effect(fn: () => () => void, name?: string): void }).effect(() => {

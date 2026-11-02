@@ -15,7 +15,7 @@ import {
 } from './tool-catalog.ts';
 
 describe('TOOL_CATALOG', () => {
-  it('只包含 QQ 插件内置的 7 个工具', () => {
+  it('只包含 QQ 插件内置的 8 个工具', () => {
     expect(catalogToolNames()).toEqual([
       'qqbot_solve',
       'qqbot_describe_image',
@@ -24,6 +24,7 @@ describe('TOOL_CATALOG', () => {
       'qqbot_summarize',
       'qqbot_explain',
       'qqbot_rewrite',
+      'qqbot_analyze_persona',
     ]);
   });
 

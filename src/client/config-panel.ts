@@ -2,8 +2,9 @@
  * QQ 机器人配置面板 — 必要配置的 UI 编辑
  *
  * UI 复刻 DSW 通用设置（settings-form 原语）的视觉风格：
- * 配置按「服务范围 / 身份与权限 / 记忆与关系 / 对话设置 / 语音回复 / 模型与提示词 / 人格预设」七个分区呈现；
+ * 配置按「服务范围 / 身份与权限 / 记忆与关系 / 群友人格 / 对话设置 / 语音回复 / 模型与提示词 / 人格预设」八个分区呈现；
  * 一次只渲染一个分区，避免单列过长；每个分区有未保存修改时 tab 显示小圆点。
+ * 「群友人格」页签含自动分析开关与人格表格（可按昵称 / openid / 人格特点筛选）。
  * 另有一个不写入配置的「插件更新」页签：检查远端版本并执行一键更新。
  * 左对齐设置列、0.5px 行分隔、label 13px/500、控件右置；
  * Switch 为 36×20 aria-checked 结构（thumb translateX 动画）；
@@ -20,7 +21,10 @@
 import { createElement, useCallback, useEffect, useState, type CSSProperties, type ChangeEvent, type FormEvent, type ReactNode } from 'react';
 import {
   BIND_CONFIG_PATH,
+  BIND_PERSONAS_PATH,
   BIND_UPDATE_PATH,
+  type PersonaProfileWire,
+  type PersonaProfilesResponse,
   type UpdateCheckWire,
   type UpdateInstallWire,
   type UpdateStateWire,
@@ -58,6 +62,19 @@ interface MemoryWire {
   enabled: boolean;
   autoCapture: boolean;
   maxNotes: number;
+}
+
+/** 群聊人格档案配置（与 src/config.ts 的 PersonaAnalysisConfig 对应的局部投影） */
+interface PersonaAnalysisWire {
+  enabled: boolean;
+  /** 每个会话最多保留的消息条数（20–1000） */
+  maxMessages: number;
+  /** 保留天数（1–365） */
+  retentionDays: number;
+  /** 是否在某位群友累计发言达到阈值后自动生成/更新人格档案 */
+  autoAnalyze: boolean;
+  /** 自动分析触发条数（5–200） */
+  autoAnalyzeThreshold: number;
 }
 
 /** 人格表达方式（与 src/config.ts 的 ExpressionsConfig 对应的局部投影） */
@@ -133,6 +150,7 @@ type ConfigWire = {
   defaultPersona?: string;
   identity?: IdentityWire;
   memory?: MemoryWire;
+  personaAnalysis?: PersonaAnalysisWire;
   access?: AccessControlWire;
   voice?: VoiceWire;
   cwd?: string;
@@ -140,7 +158,7 @@ type ConfigWire = {
 
 /** 样式注入标记（幂等；版本变化时替换旧样式，避免客户端热更新后仍用旧样式） */
 const STYLE_ID = 'im-qqbot-config-panel-styles';
-const STYLE_VERSION = '7';
+const STYLE_VERSION = '8';
 
 /** DSW 通用设置风格（settings-form / Switch / SegmentedControl 原语复刻） */
 function useConfigPanelStyles(): void {
@@ -342,6 +360,44 @@ function useConfigPanelStyles(): void {
 }
 /* cwd 只读行 */
 .imqb2-readonly { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--dsw-alias-label-secondary); word-break: break-all; margin: 0; }
+/* 群友人格：筛选栏 + 表格 + 详情 */
+.imqb2-filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 0 10px; }
+.imqb2-filter { flex: 1 1 140px; min-width: 120px; }
+.imqb2-table-wrap { width: 100%; overflow-x: auto; padding-bottom: 4px; }
+.imqb2-table { width: 100%; border-collapse: collapse; font-size: 12px; line-height: 1.5; }
+.imqb2-table th {
+  padding: 6px 8px; text-align: left; white-space: nowrap; font-weight: 600;
+  color: var(--dsw-alias-label-tertiary); border-bottom: 0.5px solid var(--dsw-alias-border-l2);
+}
+.imqb2-table td {
+  padding: 7px 8px; vertical-align: top; color: var(--dsw-alias-label-primary);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
+}
+.imqb2-table tr[data-expanded='true'] td { background: var(--dsw-alias-interactive-bg-hover); }
+.imqb2-table-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--dsw-alias-label-secondary); white-space: nowrap;
+}
+.imqb2-table-name { font-weight: 500; white-space: nowrap; }
+.imqb2-table-click {
+  appearance: none; border: 0; background: transparent; padding: 0;
+  font: inherit; color: var(--dsw-alias-label-secondary); cursor: pointer; white-space: nowrap;
+}
+.imqb2-table-click:hover { color: var(--dsw-alias-label-primary); text-decoration: underline; }
+.imqb2-table-meta { color: var(--dsw-alias-label-tertiary); white-space: nowrap; }
+.imqb2-chip--trait { font-size: 11px; padding: 2px 6px; }
+.imqb2-chip--warn {
+  border-color: var(--dsw-alias-state-warning-primary, #b26b00);
+  color: var(--dsw-alias-state-warning-primary, #b26b00);
+}
+.imqb2-detail {
+  display: flex; flex-direction: column; gap: 6px; padding: 8px 0 4px;
+  font-size: 12px; line-height: 1.6; color: var(--dsw-alias-label-secondary);
+}
+.imqb2-detail-title { font-weight: 600; color: var(--dsw-alias-label-primary); }
+.imqb2-detail-row { display: flex; gap: 6px; }
+.imqb2-detail-key { flex: none; width: 76px; color: var(--dsw-alias-label-tertiary); }
+.imqb2-empty { margin: 0; padding: 12px 0; font-size: 12px; line-height: 1.6; color: var(--dsw-alias-label-tertiary); }
     `;
     document.head.appendChild(style);
     return () => { style.remove(); };
@@ -406,6 +462,255 @@ function FieldRow({ label, help, value, placeholder, type, onChange }: {
       onChange: (event: ChangeEvent<HTMLInputElement>) => { onChange(event.currentTarget.value); },
     }),
     help === undefined ? null : createElement('p', { className: 'imqb2-hint' }, help),
+  );
+}
+
+/** 毫秒时间戳 → 本地 MM-DD HH:mm（表格紧凑展示） */
+function formatShortTime(timestamp?: number): string {
+  if (timestamp === undefined || !Number.isFinite(timestamp)) return '—';
+  const date = new Date(timestamp);
+  const pad = (value: number): string => String(value).padStart(2, '0');
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/** 可信度中文 */
+function confidenceText(confidence?: PersonaProfileWire['confidence']): string {
+  return confidence === 'high' ? '高' : confidence === 'medium' ? '中' : confidence === 'low' ? '低' : '未评估';
+}
+
+/** 特点 chips（最多展示 4 个，超出用 +N） */
+function traitChips(traits: readonly string[]): ReactNode {
+  if (traits.length === 0) return createElement('span', { className: 'imqb2-table-meta' }, '—');
+  const shown = traits.slice(0, 4);
+  return createElement('span', { className: 'imqb2-chips' },
+    ...shown.map((trait) => createElement('span', {
+      key: trait, className: 'imqb2-chip imqb2-chip--trait',
+    }, trait)),
+    traits.length > shown.length
+      ? createElement('span', { className: 'imqb2-table-meta' }, `+${traits.length - shown.length}`)
+      : null,
+  );
+}
+
+/** 会话分布文案（群聊只拿得到 openid，用短 id 区分） */
+function chatDistribution(profile: PersonaProfileWire): string {
+  if (profile.chats.length === 0) return '—';
+  return profile.chats
+    .filter((chat) => chat.messageCount > 0)
+    .slice(0, 4)
+    .map((chat) => `${chat.scope === 'group' ? '群' : '私聊'} ${chat.peerId.slice(0, 8)} · ${chat.messageCount} 条`)
+    .join('；');
+}
+
+/**
+ * 表格里的会话摘要（区分群聊 / 私聊）。
+ *
+ * 私聊与群聊下发的是同一个 openid（实测一致），所以同一个人的两处发言
+ * 会落在一行里；这里把「几个群、几个私聊」直接标出来，避免只看到数字。
+ */
+function chatSummary(profile: PersonaProfileWire): string {
+  const groupCount = profile.chats.filter((chat) => chat.scope === 'group').length;
+  const c2cCount = profile.chats.filter((chat) => chat.scope === 'c2c').length;
+  const parts = [
+    groupCount > 0 ? `群 ${groupCount}` : '',
+    c2cCount > 0 ? `私聊 ${c2cCount}` : '',
+  ].filter((part) => part !== '');
+  return parts.length > 0 ? parts.join(' · ') : String(profile.chatCount);
+}
+
+/** 一行卡的详情（展开后展示结构化分析结果） */
+function PersonaProfileDetail({ profile }: { profile: PersonaProfileWire }): ReactNode {
+  const rows: Array<{ key: string; value: ReactNode }> = [
+    {
+      key: '分析状态',
+      value: profile.analyzedAt === undefined
+        ? profile.pending
+          ? '累计发言已达阈值，等待自动分析（也可在群里让机器人手动分析）'
+          : '尚未分析（发言达到阈值后会自动生成）'
+        : `${formatShortTime(profile.analyzedAt)} · 覆盖 ${profile.analyzedMessageCount ?? 0} 条`
+          + ` · 可信度 ${confidenceText(profile.confidence)}`,
+    },
+    ...(profile.provider !== undefined
+      ? [{ key: '分析模型', value: `${profile.provider} / ${profile.model ?? ''}` }]
+      : []),
+    { key: '说话风格', value: profile.style ?? '—' },
+    { key: '口头禅', value: profile.catchphrases.length > 0 ? profile.catchphrases.join('；') : '—' },
+    { key: '兴趣', value: profile.interests.length > 0 ? profile.interests.join('；') : '—' },
+    { key: '群内角色', value: profile.role ?? '—' },
+    { key: '相处建议', value: profile.advice ?? '—' },
+    { key: '会话分布', value: chatDistribution(profile) },
+    { key: 'openid', value: createElement('span', { className: 'imqb2-table-mono' }, profile.senderId) },
+    ...(profile.lastError !== undefined
+      ? [{ key: '上次失败', value: createElement('span', { className: 'imqb2-hint-warn' }, profile.lastError) }]
+      : []),
+  ];
+  return createElement('div', { className: 'imqb2-detail' },
+    ...rows.map((row) => createElement('div', { key: row.key, className: 'imqb2-detail-row' },
+      createElement('span', { className: 'imqb2-detail-key' }, row.key),
+      createElement('span', {}, row.value),
+    )),
+  );
+}
+
+/**
+ * 群友人格表格（设置面板「群友人格」页签）。
+ *
+ * 数据来自 `GET /qqbot/im-qqbot/personas`，筛选在服务端完成（名称 / openid /
+ * 人格特点），300ms 防抖；点一行展开结构化分析结果。
+ */
+function PersonaProfilesTable({ archived }: { archived: boolean }): ReactNode {
+  const [name, setName] = useState('');
+  const [openid, setOpenid] = useState('');
+  const [trait, setTrait] = useState('');
+  const [query, setQuery] = useState({ name: '', openid: '', trait: '' });
+  const [profiles, setProfiles] = useState<PersonaProfileWire[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  // 输入防抖：连续输入时只在停顿 300ms 后查询，避免每敲一个字都打路由
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setQuery({ name, openid, trait });
+    }, 300);
+    return () => { clearTimeout(timer); };
+  }, [name, openid, trait]);
+
+  useEffect(() => {
+    let stopped = false;
+    const params = new URLSearchParams();
+    if (query.name.trim() !== '') params.set('name', query.name.trim());
+    if (query.openid.trim() !== '') params.set('openid', query.openid.trim());
+    if (query.trait.trim() !== '') params.set('trait', query.trait.trim());
+    setLoading(true);
+    setError(null);
+    void fetch(`${BIND_PERSONAS_PATH}?${params.toString()}`, { cache: 'no-store' })
+      .then(async (res) => {
+        const body = (await res.json().catch(() => ({}))) as PersonaProfilesResponse;
+        if (stopped) return;
+        if (body.ok !== true) {
+          setProfiles([]);
+          setTotal(0);
+          setError(body.error ?? `读取人格档案失败（HTTP ${res.status}）`);
+          return;
+        }
+        setProfiles(Array.isArray(body.profiles) ? body.profiles : []);
+        setTotal(typeof body.total === 'number' ? body.total : 0);
+      })
+      .catch((err: unknown) => {
+        if (!stopped) setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!stopped) setLoading(false);
+      });
+    return () => { stopped = true; };
+  }, [query.name, query.openid, query.trait, refreshKey, archived]);
+
+  const filterInput = (
+    label: string,
+    value: string,
+    onChange: (next: string) => void,
+  ): ReactNode => createElement('input', {
+    className: 'imqb2-input imqb2-filter',
+    value,
+    placeholder: label,
+    'aria-label': label,
+    spellCheck: false,
+    autoComplete: 'off',
+    onChange: (event: ChangeEvent<HTMLInputElement>) => { onChange(event.currentTarget.value); },
+    // 面板整体在 <form> 里：回车不应触发表单提交（保存配置）
+    onKeyDown: (event: { key: string; preventDefault: () => void }) => {
+      if (event.key === 'Enter') event.preventDefault();
+    },
+  });
+
+  const header = createElement('tr', {},
+    createElement('th', {}, '昵称'),
+    createElement('th', {}, 'openid'),
+    createElement('th', {}, '会话'),
+    createElement('th', {}, '消息'),
+    createElement('th', {}, '人格特点'),
+    createElement('th', {}, '一句话印象'),
+    createElement('th', {}, '最近发言'),
+  );
+
+  const rows = profiles.map((profile) => {
+    const isOpen = expanded === profile.senderId;
+    const trimmedName = profile.senderName?.trim() ?? '';
+    const displayName = trimmedName !== '' ? trimmedName : `${profile.senderId.slice(0, 8)}…`;
+    return createElement('tbody', { key: profile.senderId },
+      createElement('tr', { 'data-expanded': isOpen },
+        createElement('td', {},
+          createElement('button', {
+            type: 'button', className: 'imqb2-table-click',
+            onClick: () => { setExpanded(isOpen ? null : profile.senderId); },
+          }, displayName),
+        ),
+        createElement('td', {},
+          createElement('span', { className: 'imqb2-table-mono', title: profile.senderId },
+            `${profile.senderId.slice(0, 8)}…`),
+        ),
+        createElement('td', {
+          className: 'imqb2-table-meta',
+          title: chatDistribution(profile),
+        }, chatSummary(profile)),
+        createElement('td', {},
+          createElement('span', { className: 'imqb2-table-meta' },
+            `${profile.messageCount} 条`
+            + (profile.analyzedMessageCount !== undefined && profile.analyzedMessageCount > 0
+              ? ` · 分析 ${profile.analyzedMessageCount}`
+              : '')),
+          profile.pending
+            ? createElement('span', { className: 'imqb2-chip imqb2-chip--warn', title: '累计发言已达到自动分析阈值' },
+                '待分析')
+            : null,
+        ),
+        createElement('td', {}, traitChips(profile.traits)),
+        createElement('td', {}, profile.summary ?? createElement('span', { className: 'imqb2-table-meta' }, '—')),
+        createElement('td', { className: 'imqb2-table-meta' }, formatShortTime(profile.lastAt)),
+      ),
+      isOpen
+        ? createElement('tr', {},
+            createElement('td', { colSpan: 7 }, createElement(PersonaProfileDetail, { profile }),
+            ),
+          )
+        : null,
+    );
+  });
+
+  return createElement('div', { className: 'imqb2-table-wrap' },
+    createElement('div', { className: 'imqb2-head', style: { paddingBottom: '4px' } },
+      createElement('span', { className: 'imqb2-label' }, '群友人格档案'),
+      createElement('button', {
+        type: 'button', className: 'imqb2-persona-add',
+        onClick: () => { setRefreshKey((key) => key + 1); },
+      }, loading ? '刷新中…' : '刷新'),
+    ),
+    createElement('div', { className: 'imqb2-filters' },
+      filterInput('按昵称筛选', name, setName),
+      filterInput('按 openid 筛选', openid, setOpenid),
+      filterInput('按人格特点筛选（如 慢热 / 毒舌）', trait, setTrait),
+    ),
+    error !== null
+      ? createElement('p', { className: 'imqb2-empty' }, `人格档案读取失败：${error}`)
+      : profiles.length === 0
+        ? createElement('p', { className: 'imqb2-empty' },
+            loading
+              ? '正在读取人格档案…'
+              : archived
+                ? '还没有匹配的人格档案。群友累计发言达到阈值后会自动分析（也可在群里 @机器人 说「分析一下某某的性格」）。'
+                : '请先打开上方「群聊人格档案」。')
+        : createElement('table', { className: 'imqb2-table' },
+            createElement('thead', {}, header),
+            ...rows,
+          ),
+    profiles.length > 0
+      ? createElement('p', { className: 'imqb2-empty' },
+          `共 ${total} 位群友${total > profiles.length ? `（当前展示 ${profiles.length} 位）` : ''}`
+          + '；同一 openid 在多个群/私聊的发言会合并成一份档案。')
+      : null,
   );
 }
 
@@ -835,7 +1140,7 @@ const SPLIT_OPTIONS: ReadonlyArray<{ value: ReplySplitMode; label: string }> = [
 ];
 
 /** 配置分区：每页只展示一组相关配置，避免单列过长 */
-type TabId = 'access' | 'identity' | 'memory' | 'conversation' | 'voice' | 'model' | 'personas' | 'update';
+type TabId = 'access' | 'identity' | 'memory' | 'members' | 'conversation' | 'voice' | 'model' | 'personas' | 'update';
 
 interface TabDef {
   id: TabId;
@@ -848,6 +1153,7 @@ const TABS: ReadonlyArray<TabDef> = [
   { id: 'access', label: '服务范围', keys: ['access'] },
   { id: 'identity', label: '身份与权限', keys: ['identity'] },
   { id: 'memory', label: '记忆与关系', keys: ['memory'] },
+  { id: 'members', label: '群友人格', keys: ['personaAnalysis'] },
   {
     id: 'conversation', label: '对话设置',
     keys: ['requireMention', 'streaming', 'replySplitMode', 'replySplitIntervalMs', 'showToolResults'],
@@ -1033,6 +1339,23 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
       };
     }
 
+    // 群聊人格档案：条数收敛到 20–1000，保留天数收敛到 1–365，自动分析阈值收敛到 5–200
+    if (changed.personaAnalysis !== undefined) {
+      const p = changed.personaAnalysis as PersonaAnalysisWire;
+      const maxMessages = Math.round(Number(p.maxMessages));
+      const retentionDays = Math.round(Number(p.retentionDays));
+      const autoAnalyzeThreshold = Math.round(Number(p.autoAnalyzeThreshold));
+      changed.personaAnalysis = {
+        enabled: p.enabled !== false,
+        maxMessages: Number.isFinite(maxMessages) ? Math.min(1000, Math.max(20, maxMessages)) : 300,
+        retentionDays: Number.isFinite(retentionDays) ? Math.min(365, Math.max(1, retentionDays)) : 30,
+        autoAnalyze: p.autoAnalyze !== false,
+        autoAnalyzeThreshold: Number.isFinite(autoAnalyzeThreshold)
+          ? Math.min(200, Math.max(5, autoAnalyzeThreshold))
+          : 20,
+      };
+    }
+
     setBusy(true);
     void fetch(BIND_CONFIG_PATH, {
       method: 'POST',
@@ -1115,6 +1438,8 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
     ?? { enabled: true, ownerOpenIds: [], adminOpenIds: [], friendOpenIds: [] };
   const memory: MemoryWire = form.memory
     ?? { enabled: true, autoCapture: true, maxNotes: 20 };
+  const personaAnalysis: PersonaAnalysisWire = form.personaAnalysis
+    ?? { enabled: true, maxMessages: 300, retentionDays: 30, autoAnalyze: true, autoAnalyzeThreshold: 20 };
   const personas = form.personas ?? [];
   // 语音配置：GET 只回 hasApiKey（Key 永远不回显）
   const voice: VoiceWire = form.voice ?? {};
@@ -1304,6 +1629,68 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
           },
         })
       : null,
+  ];
+
+  const membersPanel: ReactNode[] = [
+    createElement(SwitchRow, {
+      label: '群聊人格档案', checked: personaAnalysis.enabled,
+      help: '按会话滚动保存群聊/私聊消息（~/.dsh-qqbot/persona-archive.json），'
+        + '供人格分析总结群友的说话风格与性格；只存本机、不上传，'
+        + '关闭后不再记录新消息（已有档案保留）',
+      onChange: (v) => { patch('personaAnalysis', { ...personaAnalysis, enabled: v }); },
+    }),
+    personaAnalysis.enabled
+      ? createElement(FieldRow, {
+          label: '每个会话最多保留条数', value: String(personaAnalysis.maxMessages), placeholder: '300',
+          help: '超出后淘汰最旧的消息（20–1000）；条数越多，人格总结的依据越充分，档案文件也越大',
+          onChange: (v) => {
+            const n = Math.round(Number(v));
+            patch('personaAnalysis', {
+              ...personaAnalysis,
+              maxMessages: Number.isFinite(n) ? Math.min(1000, Math.max(20, n)) : 300,
+            });
+          },
+        })
+      : null,
+    personaAnalysis.enabled
+      ? createElement(FieldRow, {
+          label: '消息保留天数', value: String(personaAnalysis.retentionDays), placeholder: '30',
+          help: '超过天数的记录会在启动与写入时清理（1–365）；删除档案文件可立即清空全部记录',
+          onChange: (v) => {
+            const n = Math.round(Number(v));
+            patch('personaAnalysis', {
+              ...personaAnalysis,
+              retentionDays: Number.isFinite(n) ? Math.min(365, Math.max(1, n)) : 30,
+            });
+          },
+        })
+      : null,
+    personaAnalysis.enabled
+      ? createElement(SwitchRow, {
+          label: '自动获取人格', checked: personaAnalysis.autoAnalyze,
+          help: '某位群友累计发言达到阈值后自动生成人格档案；之后每新增同样条数再更新一次，'
+            + '失败会冷却 10 分钟。关闭后只能手动让机器人分析',
+          onChange: (v) => { patch('personaAnalysis', { ...personaAnalysis, autoAnalyze: v }); },
+        })
+      : null,
+    personaAnalysis.enabled && personaAnalysis.autoAnalyze
+      ? createElement(FieldRow, {
+          label: '自动分析触发条数', value: String(personaAnalysis.autoAnalyzeThreshold), placeholder: '20',
+          help: '累计发言达到这个条数就自动分析一次（5–200）；数值越小档案更新越频繁，模型调用也越多',
+          onChange: (v) => {
+            const n = Math.round(Number(v));
+            patch('personaAnalysis', {
+              ...personaAnalysis,
+              autoAnalyzeThreshold: Number.isFinite(n) ? Math.min(200, Math.max(5, n)) : 20,
+            });
+          },
+        })
+      : null,
+    createElement('p', { className: 'imqb2-hint', style: { padding: '0 0 8px' } },
+      '档案只从开启后开始积累：QQ 官方接口不提供任意群的历史消息，机器人未上线期间的消息无法补录。'
+      + '同一个 openid 在多个群/私聊的发言会合并成一份档案；'
+      + '设置面板的表格可按昵称、openid、人格特点筛选，分析结果也可作为后续新增人格的参考。'),
+    createElement(PersonaProfilesTable, { archived: personaAnalysis.enabled }),
   ];
 
   const conversationPanel: ReactNode[] = [
@@ -1614,6 +2001,7 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
     access: accessPanel,
     identity: identityPanel,
     memory: memoryPanel,
+    members: membersPanel,
     conversation: conversationPanel,
     voice: voicePanel,
     model: modelPanel,

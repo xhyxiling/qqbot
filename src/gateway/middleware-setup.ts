@@ -26,12 +26,21 @@ import { buildCommandList } from '../commands/index.ts';
 import { attachmentProcessor } from '../middleware/attachment.ts';
 import { questionAnswer } from '../middleware/question-answer.ts';
 import { getHistoryStore, historyGroupKey } from '../features/history-store.ts';
+import {
+  createPersonaArchiveMiddleware,
+  type PersonaArchive,
+  type PersonaArchiveNotice,
+} from '../features/persona-archive.ts';
 
 export function setupMiddlewares(
   bot: QQBot,
   config: ImQQBotConfig,
   manager: SessionManager,
   logger: Logger,
+  /** 群聊人格档案（personaAnalysis.enabled=false 时不传，不记录） */
+  personaArchive?: PersonaArchive,
+  /** 新消息写入档案后的同步通知（自动人格分析排队用，不能阻塞消息链） */
+  onArchived?: (notice: PersonaArchiveNotice) => void,
 ): void {
   // 1. 错误兜底（最外层洋葱皮）
   bot.use(errorHandler());
@@ -68,6 +77,12 @@ export function setupMiddlewares(
       return historyGroupKey(config.appId, gid);
     },
   }));
+
+  // 4.5. 群聊人格档案 — 同样在 @ 门控之前，未 @bot 的消息也计入长期样本；
+  //      访问控制已在第 3 步完成，被拒绝的群/用户不会写盘
+  if (personaArchive !== undefined) {
+    bot.use(createPersonaArchiveMiddleware(config, personaArchive, logger, onArchived));
+  }
 
   // 5. 群聊 @bot 门控
   bot.use(mentionGate({

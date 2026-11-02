@@ -25,6 +25,9 @@ export const BIND_CONFIG_PATH = '/qqbot/im-qqbot/config';
 /** 插件更新检查与执行（设置面板「插件更新」页签） */
 export const BIND_UPDATE_PATH = '/qqbot/im-qqbot/update';
 
+/** 群友人格档案列表（设置面板「群友人格」页签） */
+export const BIND_PERSONAS_PATH = '/qqbot/im-qqbot/personas';
+
 /** 线上协议（HTTP 路由序列化形态） */
 export type BindStateWire =
   | { phase: 'starting' }
@@ -81,5 +84,66 @@ export interface UpdateStateWire {
   install?: UpdateInstallWire;
   check?: UpdateCheckWire;
   message?: string;
+  error?: string;
+}
+
+/** 群友人格档案：一个会话里的发言分布 */
+export interface PersonaProfileChatWire {
+  chatKey: string;
+  scope: 'group' | 'c2c';
+  peerId: string;
+  messageCount: number;
+  firstAt: number;
+  lastAt: number;
+}
+
+/** 群友人格档案（设置面板表格的一行） */
+export interface PersonaProfileWire {
+  senderId: string;
+  senderName?: string;
+  /** 跨会话累计发言条数 */
+  messageCount: number;
+  /** 覆盖的会话数 */
+  chatCount: number;
+  chats: PersonaProfileChatWire[];
+  firstAt?: number;
+  lastAt?: number;
+  /** 结构化分析结果（未分析时缺省） */
+  summary?: string;
+  traits: string[];
+  style?: string;
+  catchphrases: string[];
+  interests: string[];
+  role?: string;
+  advice?: string;
+  confidence?: 'low' | 'medium' | 'high';
+  analyzedAt?: number;
+  analyzedMessageCount?: number;
+  provider?: string;
+  model?: string;
+  /** 是否已达到自动分析门槛、等待下一次分析 */
+  pending: boolean;
+  /** 最近一次自动分析失败的原因 */
+  lastError?: string;
+}
+
+/** 群友人格列表查询参数 */
+export interface PersonaProfileQuery {
+  /** 昵称包含匹配 */
+  name?: string;
+  /** openid 包含/前缀匹配 */
+  openid?: string;
+  /** 性格特点/风格包含匹配 */
+  trait?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/** 群友人格列表响应 */
+export interface PersonaProfilesResponse {
+  ok: boolean;
+  profiles: PersonaProfileWire[];
+  /** 过滤后的总条数（分页前） */
+  total: number;
   error?: string;
 }

@@ -14,6 +14,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
   BIND_CONFIG_PATH,
   BIND_MANUAL_PATH,
+  BIND_PERSONAS_PATH,
   BIND_REFRESH_PATH,
   BIND_STATE_PATH,
   BIND_UNBIND_PATH,
@@ -1098,6 +1099,164 @@ describe('bind-routes', () => {
         crossSite,
       );
       expect(crossSite.statusCode).toBe(403);
+    });
+  });
+
+  describe('群友人格列表路由', () => {
+    /** 带 url 的假 req（查询参数解析用） */
+    function reqWithUrl(
+      method: string,
+      url: string,
+      headers: Record<string, string | undefined> = { host: '127.0.0.1:3080' },
+    ): IncomingMessage {
+      const req = fakeReq(method, headers);
+      Object.assign(req, { url });
+      return req;
+    }
+
+    it('注册精确路由', () => {
+      const { routes } = createHarness();
+      expect(routes.has(BIND_PERSONAS_PATH)).toBe(true);
+      expect(routes.get(BIND_PERSONAS_PATH)?.kind).toBe('exact');
+    });
+
+    it('未注入数据源时返回 200 + 空表与原因（面板可区分「未启用」）', async () => {
+      const { routes } = createHarness();
+      const res = fakeRes();
+      await invoke(routes.get(BIND_PERSONAS_PATH), reqWithUrl('GET', BIND_PERSONAS_PATH), res);
+
+      expect(res.statusCode).toBe(200);
+      expect(json(res)).toEqual({
+        ok: false, profiles: [], total: 0, error: '群友人格档案未启用',
+      });
+      expect(res.headers['cache-control']).toBe('no-store');
+    });
+
+    it('解析名称 / openid / 特点 / 分页参数并原样传给数据源', async () => {
+      const listPersonaProfiles = vi.fn(() => ({ ok: true, profiles: [], total: 0 }));
+      const { routes } = createHarness({
+        listPersonaProfiles: listPersonaProfiles as unknown as NonNullable<BindRoutesOptions['listPersonaProfiles']>,
+      });
+      const res = fakeRes();
+      await invoke(
+        routes.get(BIND_PERSONAS_PATH),
+        reqWithUrl('GET', `${BIND_PERSONAS_PATH}?name=%E5%B0%8F%E6%98%8E&openid=u1&trait=%E7%90%86%E6%80%A7&limit=10&offset=5`),
+        res,
+      );
+
+      expect(res.statusCode).toBe(200);
+      expect(listPersonaProfiles).toHaveBeenCalledWith({
+        name: '小明', openid: 'u1', trait: '理性', limit: 10, offset: 5,
+      });
+    });
+
+    it('空白查询参数视为未提供（不传空串给数据源）', async () => {
+      const listPersonaProfiles = vi.fn(() => ({ ok: true, profiles: [], total: 0 }));
+      const { routes } = createHarness({
+        listPersonaProfiles: listPersonaProfiles as unknown as NonNullable<BindRoutesOptions['listPersonaProfiles']>,
+      });
+      const res = fakeRes();
+      await invoke(
+        routes.get(BIND_PERSONAS_PATH),
+        reqWithUrl('GET', `${BIND_PERSONAS_PATH}?name=%20&openid=&trait=&limit=abc&offset=-1`),
+        res,
+      );
+
+      expect(listPersonaProfiles).toHaveBeenCalledWith({});
+    });
+
+    it('数据源抛错时返回 500 + 中文原因', async () => {
+      const { routes } = createHarness({
+        listPersonaProfiles: () => { throw new Error('磁盘损坏'); },
+      });
+      const res = fakeRes();
+      await invoke(routes.get(BIND_PERSONAS_PATH), reqWithUrl('GET', BIND_PERSONAS_PATH), res);
+
+      expect(res.statusCode).toBe(500);
+      expect(json(res)).toMatchObject({
+        ok: false, profiles: [], total: 0, error: expect.stringContaining('磁盘损坏'),
+      });
+    });
+
+    it('HEAD 允许、POST 405、跨站 Origin 403', async () => {
+      const { routes } = createHarness({
+        listPersonaProfiles: () => ({ ok: true, profiles: [], total: 0 }),
+      });
+
+      const head = fakeRes();
+      await invoke(routes.get(BIND_PERSONAS_PATH), reqWithUrl('HEAD', BIND_PERSONAS_PATH), head);
+      expect(head.statusCode).toBe(200);
+
+      const post = fakeRes();
+      await invoke(routes.get(BIND_PERSONAS_PATH), reqWithUrl('POST', BIND_PERSONAS_PATH), post);
+      expect(post.statusCode).toBe(405);
+
+      const crossSite = fakeRes();
+      await invoke(
+        routes.get(BIND_PERSONAS_PATH),
+        reqWithUrl('GET', BIND_PERSONAS_PATH, { host: '127.0.0.1:3080', origin: 'https://evil.example.com' }),
+        crossSite,
+      );
+      expect(crossSite.statusCode).toBe(403);
+    });
+  });
+
+  describe('personaAnalysis 配置校验', () => {
+    function postConfig(
+      routes: Map<string, WebRoute>,
+      body: string,
+    ): Promise<ServerResponse & { statusCode: number; body: string }> {
+      const res = fakeRes();
+      return invoke(
+        routes.get(BIND_CONFIG_PATH),
+        fakeReq('POST', { host: '127.0.0.1:3080' }, body),
+        res,
+      ).then(() => res);
+    }
+
+    it('自动分析开关与阈值原样保存', async () => {
+      let saved: Record<string, unknown> | undefined;
+      const { routes } = createHarness({ onUpdateConfig: (config) => { saved = config; return true; } });
+      const res = await postConfig(
+        routes,
+        '{"personaAnalysis":{"enabled":true,"maxMessages":300,"retentionDays":30,'
+        + '"autoAnalyze":false,"autoAnalyzeThreshold":35}}',
+      );
+      expect(res.statusCode).toBe(200);
+      expect(saved).toEqual({
+        personaAnalysis: {
+          enabled: true, maxMessages: 300, retentionDays: 30, autoAnalyze: false, autoAnalyzeThreshold: 35,
+        },
+      });
+    });
+
+    it('缺省字段回落到默认值（自动分析开启、阈值 20）', async () => {
+      let saved: Record<string, unknown> | undefined;
+      const { routes } = createHarness({ onUpdateConfig: (config) => { saved = config; return true; } });
+      const res = await postConfig(routes, '{"personaAnalysis":{}}');
+      expect(res.statusCode).toBe(200);
+      expect(saved).toEqual({
+        personaAnalysis: {
+          enabled: true, maxMessages: 300, retentionDays: 30, autoAnalyze: true, autoAnalyzeThreshold: 20,
+        },
+      });
+    });
+
+    it('阈值低于 5 或高于 200 被拒绝', async () => {
+      const { routes } = createHarness();
+      const tooSmall = await postConfig(routes, '{"personaAnalysis":{"autoAnalyzeThreshold":4}}');
+      expect(tooSmall.statusCode).toBe(400);
+      expect(json(tooSmall)).toMatchObject({ ok: false, error: expect.stringContaining('5–200') });
+
+      const tooLarge = await postConfig(routes, '{"personaAnalysis":{"autoAnalyzeThreshold":201}}');
+      expect(tooLarge.statusCode).toBe(400);
+    });
+
+    it('autoAnalyze 必须是布尔值', async () => {
+      const { routes } = createHarness();
+      const res = await postConfig(routes, '{"personaAnalysis":{"autoAnalyze":"yes"}}');
+      expect(res.statusCode).toBe(400);
+      expect(json(res)).toMatchObject({ ok: false, error: expect.stringContaining('布尔') });
     });
   });
 });
