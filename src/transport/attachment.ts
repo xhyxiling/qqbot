@@ -10,6 +10,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { basename, extname, join, sep } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import * as dns from 'node:dns';
+import * as https from 'node:https';
 import type { Logger, RawAttachment } from '../types.ts';
 import type { MediaConfig } from '../config.ts';
 import { MEDIA_ROOT } from '../media/media-cleaner.ts';
@@ -115,53 +116,93 @@ function isPrivateIP(ip: string): boolean {
   );
 }
 
-/** 解析 hostname 并阻断指向私有/内网地址的 URL（SSRF 防护） */
-async function assertSafeHostname(hostname: string): Promise<void> {
-  const addresses = await dns.promises.resolve4(hostname).catch(() => []);
-  if (addresses.length === 0) throw new Error(`DNS resolution failed: ${hostname}`);
-  for (const addr of addresses) {
-    if (isPrivateIP(addr)) throw new Error(`SSRF blocked: ${hostname} resolves to private IP ${addr}`);
-  }
+/**
+ * 解析 hostname 并阻断指向私有/内网地址的 URL（SSRF 防护）
+ * @returns 一个可达的 IPv4 地址（用于后续 https.request 跳过 fetch DNS）
+ */
+async function assertSafeHostname(hostname: string): Promise<string> {
+  // 优先 dns.lookup（走系统 resolver，会 fallback 到 hosts 文件），
+  // fallback 到 resolve4（只查 A 记录）——两者都尝试，哪个先返回可用 IPv4 就用
+  const ip = await new Promise<string>((resolve, reject) => {
+    let done = false;
+    const onResult = (ip?: string | null, err?: NodeJS.ErrnoException | null) => {
+      if (done) return;
+      if (!err && ip) { done = true; resolve(ip); }
+    };
+    dns.lookup(hostname, { family: 4 }, (err, address) => onResult(address, err));
+    dns.promises.resolve4(hostname).then(
+      (ips) => { if (ips.length > 0) onResult(ips[0], null); },
+      () => {}, // resolve4 失败忽略，等 lookup
+    ).catch(() => {});
+    // 1.5s 超时后 reject
+    setTimeout(() => {
+      if (!done) { done = true; reject(new Error(`DNS resolution failed: ${hostname}`)); }
+    }, 1500);
+  });
+
+  if (isPrivateIP(ip)) throw new Error(`SSRF blocked: ${hostname} resolves to private IP ${ip}`);
+  return ip;
 }
 
-/** 安全下载：仅 HTTPS + SSRF 防护 + 大小上限 + 超时 + DNS 失败时 retry */
+/** 用 https.request 手动下载（绕过 fetch 的 DNS 解析，直接用已知 IPv4） */
+function downloadViaHttps(
+  url: string,
+  ip: string,
+  destPath: string,
+  maxBytes: number,
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const req = https.request({
+      method: 'GET',
+      hostname: ip,          // 直接用 IP，跳过 DNS
+      port: 443,
+      path: parsed.pathname + parsed.search,
+      headers: {
+        Host: parsed.hostname, // 保留原始 hostname 做 SNI
+        'User-Agent': 'dsh-qqbot/1.0',
+      },
+      timeout: DOWNLOAD_TIMEOUT_MS,
+      servername: parsed.hostname, // TLS SNI 必须用原始 hostname
+    }, (res) => {
+      if (res.statusCode !== 200 && res.statusCode !== 206) {
+        reject(new Error(`HTTP ${res.statusCode}`));
+        return;
+      }
+      let bytes = 0;
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk: Buffer) => {
+        bytes += chunk.length;
+        if (bytes > maxBytes) {
+          reject(new Error(`Download exceeds ${Math.floor(maxBytes / 1024 / 1024)}MB`));
+          req.destroy();
+          return;
+        }
+        chunks.push(chunk);
+      });
+      res.on('end', () => {
+        const buf = Buffer.concat(chunks);
+        writeFileSync(destPath, buf);
+        resolve(buf.length);
+      });
+      res.on('error', reject);
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(new Error('Download timeout')); });
+    req.end();
+  });
+}
+
+/** 安全下载：仅 HTTPS + SSRF 防护 + 大小上限 + 超时 */
 async function download(url: string, destPath: string, maxBytes: number): Promise<number> {
   const parsed = new URL(normalizeUrl(url));
   if (parsed.protocol !== 'https:') {
     throw new Error(`Only HTTPS allowed: ${parsed.protocol}`);
   }
-  await assertSafeHostname(parsed.hostname);
-
-  // fetch 可能因为 DNS 解析失败而崩（Windows + 某些 CDN 只返回 IPv6 AAAA 记录时）
-  // 先手动 resolve DNS 确认可达，再重试（最多 3 次）
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      // 强制 IPv4 lookup（QQ CDN multimedia.nt.qq.com.cn 在某些网络只给 AAAA）
-      await new Promise<void>((resolve, reject) => {
-        dns.lookup(parsed.hostname, { family: 4 }, (err) => {
-          err ? reject(err) : resolve();
-        });
-      });
-
-      const resp = await fetch(url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-
-      const buf = Buffer.from(await resp.arrayBuffer());
-      if (buf.length > maxBytes) {
-        throw new Error(`Download exceeds ${Math.floor(maxBytes / 1024 / 1024)}MB`);
-      }
-      writeFileSync(destPath, buf);
-      return buf.length;
-    } catch (err) {
-      lastError = err;
-      if (attempt < 2) {
-        // 指数退避
-        await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
-      }
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  // 解析 hostname → 拿到一个可达的 IPv4（SSRF 防护已在内部做）
+  const ip = await assertSafeHostname(parsed.hostname);
+  // 用 https.request 指定 IP 连接（绕过 fetch 内置 DNS），避免 Windows 某些环境 DNS 异常
+  return await downloadViaHttps(url, ip, destPath, maxBytes);
 }
 
 /**
