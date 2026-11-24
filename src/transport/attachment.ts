@@ -124,7 +124,7 @@ async function assertSafeHostname(hostname: string): Promise<void> {
   }
 }
 
-/** 安全下载：仅 HTTPS + SSRF 防护 + 大小上限 + 超时，返回下载字节数 */
+/** 安全下载：仅 HTTPS + SSRF 防护 + 大小上限 + 超时 + DNS 失败时 retry */
 async function download(url: string, destPath: string, maxBytes: number): Promise<number> {
   const parsed = new URL(normalizeUrl(url));
   if (parsed.protocol !== 'https:') {
@@ -132,15 +132,36 @@ async function download(url: string, destPath: string, maxBytes: number): Promis
   }
   await assertSafeHostname(parsed.hostname);
 
-  const resp = await fetch(url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  // fetch 可能因为 DNS 解析失败而崩（Windows + 某些 CDN 只返回 IPv6 AAAA 记录时）
+  // 先手动 resolve DNS 确认可达，再重试（最多 3 次）
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      // 强制 IPv4 lookup（QQ CDN multimedia.nt.qq.com.cn 在某些网络只给 AAAA）
+      await new Promise<void>((resolve, reject) => {
+        dns.lookup(parsed.hostname, { family: 4 }, (err) => {
+          err ? reject(err) : resolve();
+        });
+      });
 
-  const buf = Buffer.from(await resp.arrayBuffer());
-  if (buf.length > maxBytes) {
-    throw new Error(`Download exceeds ${Math.floor(maxBytes / 1024 / 1024)}MB`);
+      const resp = await fetch(url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+      const buf = Buffer.from(await resp.arrayBuffer());
+      if (buf.length > maxBytes) {
+        throw new Error(`Download exceeds ${Math.floor(maxBytes / 1024 / 1024)}MB`);
+      }
+      writeFileSync(destPath, buf);
+      return buf.length;
+    } catch (err) {
+      lastError = err;
+      if (attempt < 2) {
+        // 指数退避
+        await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
+      }
+    }
   }
-  writeFileSync(destPath, buf);
-  return buf.length;
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 /**
