@@ -37,6 +37,13 @@ export const TOOL_CATALOG: ReadonlyArray<ToolCatalogEntry> = [
   { name: 'qqbot_send_sticker', label: '挑表情并直接发送（组合工具）', group: GROUP_PLUGIN },
 ];
 
+/** sticker 三工具：消息投递能力，和 qqbot_voice 一样始终放行（不受 persona 工具白名单限制） */
+export const STICKER_TOOL_NAMES: readonly string[] = [
+  'qqbot_pick_sticker',
+  'qqbot_save_sticker',
+  'qqbot_send_sticker',
+];
+
 /**
  * QQ 机器人默认放行的工具。
  *

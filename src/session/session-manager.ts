@@ -34,7 +34,7 @@ import {
   resolveToolBinding,
   type ToolsRestrictServiceLike,
 } from '../personas/persona-tools.ts';
-import { DEFAULT_TOOL_ALLOWLIST } from '../shared/tool-catalog.ts';
+import { DEFAULT_TOOL_ALLOWLIST, STICKER_TOOL_NAMES } from '../shared/tool-catalog.ts';
 import type { ModelRoute, ModelEntry } from '../model/types.ts';
 import { buildIdentityPromptSection } from '../identity/role.ts';
 import { MemoryStore, type ChatMemory, type MemoryNote } from '../memory/memory-store.ts';
@@ -483,6 +483,10 @@ export class SessionManager {
     // 即使人格显式写了 `tools: []`（否则该人格永远发不了语音）。
     if (resolveActiveVoiceSettings(this.config.voice) !== undefined && !whitelist.includes(VOICE_TOOL_NAME)) {
       whitelist.push(VOICE_TOOL_NAME);
+    }
+    // sticker 三工具也是消息投递能力：始终放行，不受 persona 白名单限制
+    for (const name of STICKER_TOOL_NAMES) {
+      if (!whitelist.includes(name)) whitelist.push(name);
     }
     return { whitelist, blocked };
   }
