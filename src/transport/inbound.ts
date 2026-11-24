@@ -22,7 +22,7 @@ import {
 import { clearGroupHistory } from '../features/history-store.ts';
 import { buildIdentityPrefix } from '../identity/role.ts';
 import type { MiddlewareContext } from '@tencent-connect/qqbot-nodejs';
-import type { StickerEngine } from '../sticker/index.ts';
+import { getActiveStickerEngine } from '../sticker/index.ts';
 
 // ── 类型定义 ──
 
@@ -107,7 +107,7 @@ export async function handleInbound(
   };
 
   // ── 自动收藏群里的图片（异步旁路，不阻塞消息处理） ──
-  const stickerEngine = (ctx as unknown as { stickerEngine?: StickerEngine }).stickerEngine;
+  const stickerEngine = getActiveStickerEngine();
   if (stickerEngine && mwState.downloadedFiles && mwState.downloadedFiles.length > 0) {
     void stickerEngine.collector.collectFromDownloaded(
       msg.attachments,

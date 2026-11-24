@@ -76,3 +76,18 @@ export function mergeStickerConfig(partial: Partial<StickerConfig> = {}): Sticke
     storage: { ...DEFAULT_STICKER_CONFIG.storage, ...partial.storage },
   };
 }
+
+// ── 模块级单例持有者 ──
+// Cordis Context 是 Service Locator（带 readonly proxy），不能直接 ctx.stickerEngine = xxx。
+// 用模块变量持有 singleton：bootstrap 设置 -> inbound 读取。
+let _activeEngine: StickerEngine | null = null;
+
+/** bootstrap 完成后调用，注册当前活跃的 StickerEngine */
+export function registerStickerEngine(engine: StickerEngine | null): void {
+  _activeEngine = engine;
+}
+
+/** inbound 里取活跃引擎（可能为 null = 未启用或未启动） */
+export function getActiveStickerEngine(): StickerEngine | null {
+  return _activeEngine;
+}

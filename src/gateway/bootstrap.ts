@@ -37,7 +37,7 @@ import { createVoiceSpeaker } from '../voice/voice-reply.ts';
 import { resolveActiveVoiceSettings } from '../voice/voice-config.ts';
 import { buildVoiceOptions } from '../voice/voice-presets.ts';
 import { registerVoiceTool, VOICE_TOOL_NAME } from '../voice/voice-tool.ts';
-import { StickerEngine, mergeStickerConfig } from '../sticker/index.ts';
+import { StickerEngine, mergeStickerConfig, registerStickerEngine } from '../sticker/index.ts';
 import { registerStickerTools, registerSendStickerTool } from '../sticker/tools.ts';
 import type { StickerConfig } from '../sticker/types.ts';
 
@@ -177,8 +177,8 @@ export async function bootstrapGateway(
     stickerEngine = new StickerEngine(stickerConfig, logger);
     await stickerEngine.start();
 
-    // 让 inbound 可以访问 collector
-    (ctx as unknown as { stickerEngine?: StickerEngine }).stickerEngine = stickerEngine;
+    // 注册到模块级 holder（Cordis Context 不能直接挂属性）
+    registerStickerEngine(stickerEngine);
 
     // 注册工具（模型可调用 qqbot_pick_sticker / qqbot_send_sticker）
     registerStickerTools(ctx, stickerEngine, logger);
@@ -304,6 +304,7 @@ export async function bootstrapGateway(
         profileStore?.flush();
         // 刷盘 sticker 元数据
         if (stickerEngine) {
+          registerStickerEngine(null); // 先注销 holder，防止 dispose 期间 inbound 还在访问
           await stickerEngine.dispose();
         }
         await manager.disposeAll();
