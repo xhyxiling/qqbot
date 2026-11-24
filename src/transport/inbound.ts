@@ -22,6 +22,7 @@ import {
 import { clearGroupHistory } from '../features/history-store.ts';
 import { buildIdentityPrefix } from '../identity/role.ts';
 import type { MiddlewareContext } from '@tencent-connect/qqbot-nodejs';
+import type { StickerEngine } from '../sticker/index.ts';
 
 // ── 类型定义 ──
 
@@ -104,6 +105,17 @@ export async function handleInbound(
     targetId: peerId,
     msgId: msg.messageId,
   };
+
+  // ── 自动收藏群里的图片（异步旁路，不阻塞消息处理） ──
+  const stickerEngine = (ctx as unknown as { stickerEngine?: StickerEngine }).stickerEngine;
+  if (stickerEngine && mwState.downloadedFiles && mwState.downloadedFiles.length > 0) {
+    void stickerEngine.collector.collectFromDownloaded(
+      msg.attachments,
+      mwState.downloadedFiles,
+      scope === 'group' ? (msg.groupOpenid ?? undefined) : undefined,
+      msg.senderId,
+    ).catch(() => { /* 收藏失败不影响主流程 */ });
+  }
 
   // ── 组装 agentBody（下载结果经 mwState.downloadedFiles 提供） ──
   const agentBody = assembleAgentBody(msg, mwState, scope, config, logger);
