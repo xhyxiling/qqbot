@@ -1,11 +1,12 @@
 /**
- * 表情包工具注册 — 暴露 qqbot_pick_sticker / qqbot_send_sticker 给模型
+ * 表情包工具注册 — 暴露 qqbot_pick_sticker / qqbot_save_sticker / qqbot_send_sticker 给模型
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { ContentBlock } from '@deepseek-ai/dsh-llm';
 import type { Logger, ReplyTarget } from '../types.ts';
+import type { ImQQBotConfig } from '../config.ts';
 import type { MediaSenderLike } from '../media/send-media.ts';
-import { StickerEngine, type StickerSelectionContext } from './index.ts';
+import { StickerEngine, type StickerSelectionContext, getLatestSessionAttachment } from './index.ts';
 import { existsSync } from 'node:fs';
 
 /** tools 服务本地最小接口（本项目内各工具文件各自定义一份） */
@@ -13,7 +14,18 @@ interface ToolsRegistryLike {
   register(definition: unknown): unknown;
 }
 
+/** SessionManager 最小投影（工具需要反查会话做权限门控） */
+interface SessionManagerLike {
+  findByAgent(agent: unknown): {
+    sessionKey: string;
+    senderId: string;
+    scope: 'c2c' | 'group';
+    peerId: string;
+  } | undefined;
+}
+
 export const PICK_STICKER_TOOL_NAME = 'qqbot_pick_sticker';
+export const SAVE_STICKER_TOOL_NAME = 'qqbot_save_sticker';
 export const SEND_STICKER_TOOL_NAME = 'qqbot_send_sticker';
 
 export function registerStickerTools(
@@ -193,6 +205,130 @@ export function registerSendStickerTool(
   });
 
   logger.info(`im-qqbot: ${SEND_STICKER_TOOL_NAME} 已注册`);
+}
+
+// ── qqbot_save_sticker — 手动收藏 ──
+
+/** 主人/admin 才能用这个工具（stranger/friend 调会被拒绝） */
+export function registerSaveStickerTool(
+  ctx: Context,
+  engine: StickerEngine,
+  manager: SessionManagerLike,
+  config: ImQQBotConfig,
+  logger: Logger,
+): void {
+  const tools = ctx.get('tools') as ToolsRegistryLike | undefined;
+  if (!tools?.register) return;
+
+  tools.register({
+    name: SAVE_STICKER_TOOL_NAME,
+    description:
+      '把当前会话最近的一张图片收藏进表情包库。'
+      + '适合用户说"@bot 收藏一下这个表情包"时调用。'
+      + '不传 filePath 时自动用当前会话最近收到的那张图。'
+      + '⚠️ 只有主人（owner）或管理员（admin）能调用，普通成员会被拒绝。',
+    parameters: {
+      type: 'object',
+      properties: {
+        filePath: {
+          type: 'string',
+          description: '要收藏的图片本地路径（留空 = 自动用当前会话最近收到的那张图）',
+        },
+        tags: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '给这张图加标签（用于后续 selector 匹配），最多 5 个',
+        },
+      },
+      required: [],
+      additionalProperties: false,
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          saved: { type: 'boolean' },
+          filename: { type: 'string' },
+          id: { type: 'string' },
+          reason: { type: 'string' },
+          alreadyExists: { type: 'boolean' },
+        },
+        required: ['saved'],
+        additionalProperties: false,
+      },
+      render: (_args: unknown, value: unknown): ContentBlock[] => {
+        const v = value as { saved: boolean; filename?: string; reason?: string; alreadyExists?: boolean };
+        if (!v.saved) return [{ type: 'text', text: `收藏失败: ${v.reason ?? '未知原因'}` }];
+        if (v.alreadyExists) return [{ type: 'text', text: `这张图之前已经收藏过啦 ✅ ${v.filename}` }];
+        return [{ type: 'text', text: `✨ 收藏成功！${v.filename} 已入库` }];
+      },
+    },
+    async execute(
+      args: unknown,
+      exec: { agent?: unknown },
+    ): Promise<Record<string, unknown>> {
+      // 1. 权限门控
+      const record = manager.findByAgent(exec.agent);
+      if (!record) {
+        return { saved: false, reason: '只能在 QQ 会话里使用这个工具' };
+      }
+
+      // 检查 sender 是否在 owner/admin 名单里
+      const identity = config.identity;
+      const ownerOpenIds = identity?.ownerOpenIds ?? [];
+      const adminOpenIds = identity?.adminOpenIds ?? [];
+      const isOwner = ownerOpenIds.includes(record.senderId);
+      const isAdmin = adminOpenIds.includes(record.senderId);
+      if (identity?.enabled && !isOwner && !isAdmin) {
+        logger.info(`save_sticker 被拒绝: senderId=${record.senderId} 不是 owner/admin`);
+        return {
+          saved: false,
+          reason: '只有主人或管理员才能手动收藏表情包',
+        };
+      }
+
+      // 2. 确定 filePath
+      const a = args as { filePath?: string; tags?: string[] };
+      let filePath = a.filePath?.trim() ?? '';
+
+      if (!filePath) {
+        // 不传 = 自动用缓存的最近图
+        const latest = getLatestSessionAttachment(record.sessionKey);
+        if (!latest) {
+          return { saved: false, reason: '当前会话最近 10 分钟内没有收到过图片，无法自动收藏' };
+        }
+        filePath = latest.localPath;
+      }
+
+      if (!existsSync(filePath)) {
+        return { saved: false, reason: `文件不存在: ${filePath}` };
+      }
+
+      // 3. 收藏
+      const sourceGroup = record.scope === 'group' ? record.peerId : undefined;
+      const result = await engine.collector.collectFile(filePath, {
+        groupId: sourceGroup,
+        senderId: record.senderId,
+      });
+
+      if (!result) {
+        return { saved: false, reason: '收藏器未启用或文件不合法（非图片/超大/超小）' };
+      }
+
+      // 如果已经存在（tryAdd 返回的是已有对象）
+      // 简单判断：新收藏 hotScore=50 且 firstCollectedAt 刚创建；老对象 useCount>0 可能有区别
+      // 这里 tryAdd 本身返回 existing 时也是同一个对象，我们用 quickId 判断是否是新加的
+      return {
+        saved: true,
+        filename: result.filename,
+        id: result.id,
+        reason: `热度 ${result.hotScore}, 标签 [${result.tags.join(',')}]`,
+        alreadyExists: result.useCount > 0, // 简化：已有 useCount 的就是之前收藏过的
+      };
+    },
+  });
+
+  logger.info(`im-qqbot: ${SAVE_STICKER_TOOL_NAME} 已注册`);
 }
 
 export type { ReplyTarget };

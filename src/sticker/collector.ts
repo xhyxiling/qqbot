@@ -20,6 +20,16 @@ import type { Sticker } from './types.ts';
 /** 允许的扩展名（与 QQ 网关一致） */
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']);
 
+/** 猜 MIME from 文件扩展名 */
+function guessMime(ext: string): string {
+  const mimeMap: Record<string, string> = {
+    '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+    '.png': 'image/png', '.gif': 'image/gif',
+    '.webp': 'image/webp', '.bmp': 'image/bmp',
+  };
+  return mimeMap[ext] ?? 'image/png';
+}
+
 export class StickerCollector {
   private readonly config: StickerCollectorConfig;
   private readonly store: StickerStore;
@@ -29,6 +39,45 @@ export class StickerCollector {
     this.config = config;
     this.store = store;
     this.logger = logger;
+  }
+
+  /**
+   * 从单个文件路径收藏 — 给手动收藏工具用
+   * @returns 新收藏的 Sticker，null 表示已存在或未收藏
+   */
+  async collectFile(filePath: string, source?: { groupId?: string; senderId?: string }): Promise<Sticker | null> {
+    if (!this.config.enabled) return null;
+    try {
+      await fs.access(filePath);
+    } catch {
+      return null;
+    }
+
+    const ext = extname(filePath).toLowerCase();
+    if (!IMAGE_EXTS.has(ext)) return null;
+
+    const stat = await fs.stat(filePath);
+    const sizeKB = stat.size / 1024;
+    if (sizeKB < this.config.minSizeKB || sizeKB > this.config.maxSizeKB) return null;
+
+    const tags = this.config.autoTag ? this.extractTags(filePath) : [];
+
+    const added = await this.store.tryAdd({
+      filePath,
+      filename: basename(filePath),
+      mimeType: guessMime(ext),
+      size: stat.size,
+      sourceGroup: source?.groupId,
+      sourceSender: source?.senderId,
+      firstCollectedAt: Date.now(),
+      tags,
+      quality: 3,
+    });
+
+    if (added) {
+      this.logger.info(`sticker-collector: 手动收藏 ${added.filename}`);
+    }
+    return added;
   }
 
   /**

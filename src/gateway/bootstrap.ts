@@ -38,7 +38,7 @@ import { resolveActiveVoiceSettings } from '../voice/voice-config.ts';
 import { buildVoiceOptions } from '../voice/voice-presets.ts';
 import { registerVoiceTool, VOICE_TOOL_NAME } from '../voice/voice-tool.ts';
 import { StickerEngine, mergeStickerConfig, registerStickerEngine } from '../sticker/index.ts';
-import { registerStickerTools, registerSendStickerTool } from '../sticker/tools.ts';
+import { registerStickerTools, registerSendStickerTool, registerSaveStickerTool } from '../sticker/tools.ts';
 import type { StickerConfig } from '../sticker/types.ts';
 
 /**
@@ -180,9 +180,10 @@ export async function bootstrapGateway(
     // 注册到模块级 holder（Cordis Context 不能直接挂属性）
     registerStickerEngine(stickerEngine);
 
-    // 注册工具（模型可调用 qqbot_pick_sticker / qqbot_send_sticker）
+    // 注册工具（模型可调用 qqbot_pick_sticker / qqbot_save_sticker / qqbot_send_sticker）
     registerStickerTools(ctx, stickerEngine, logger);
     registerSendStickerTool(ctx, stickerEngine, mediaSender, logger);
+    registerSaveStickerTool(ctx, stickerEngine, manager, config, logger);
 
     console.log('[im-qqbot] Sticker engine enabled ✨');
   } else {
