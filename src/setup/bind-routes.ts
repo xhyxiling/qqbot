@@ -180,6 +180,7 @@ const EDITABLE_CONFIG_KEYS = new Set([
   'personaAnalysis',
   'access',
   'voice',
+  'sticker',
 ]);
 
 /** 白名单键的子 Schema（服务端校验：客户端校验仅为体验，安全边界在宿主） */
@@ -200,6 +201,7 @@ const EDITABLE_CONFIG_SCHEMAS: Record<string, (value: unknown) => unknown> = {
   memory: (v) => memorySchema(v),
   personaAnalysis: (v) => personaAnalysisSchema(v),
   access: (v) => AccessControlSchema(v as never),
+  sticker: (v) => stickerSchema(v),
   // voice 需要当前生效的 Key 来支持「留空 = 保持已保存的 Key」，见 handleConfig
 };
 
@@ -675,6 +677,172 @@ function memorySchema(value: unknown): {
     autoCapture: record.autoCapture !== false,
     maxNotes,
   };
+}
+
+/** 表情包进化系统配置 — 整体开关 + 四种子配置（collector / selector / evolver / storage） */
+function stickerSchema(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new TypeError('sticker 必须是对象');
+  }
+  const record = value as Record<string, unknown>;
+
+  const out: Record<string, unknown> = {};
+
+  // 顶层开关
+  if (record.enabled !== undefined) {
+    if (typeof record.enabled !== 'boolean') throw new TypeError('sticker.enabled 必须是布尔值');
+    out.enabled = record.enabled;
+  }
+
+  // collector 子块
+  if (record.collector !== undefined && record.collector !== null) {
+    if (typeof record.collector !== 'object' || Array.isArray(record.collector)) {
+      throw new TypeError('sticker.collector 必须是对象');
+    }
+    const c = record.collector as Record<string, unknown>;
+    const co: Record<string, unknown> = {};
+    if (c.enabled !== undefined) {
+      if (typeof c.enabled !== 'boolean') throw new TypeError('sticker.collector.enabled 必须是布尔值');
+      co.enabled = c.enabled;
+    }
+    if (c.maxPerGroupPerDay !== undefined) {
+      if (typeof c.maxPerGroupPerDay !== 'number' || !Number.isFinite(c.maxPerGroupPerDay)) {
+        throw new TypeError('sticker.collector.maxPerGroupPerDay 必须是数字');
+      }
+      const v = c.maxPerGroupPerDay;
+      if (!Number.isInteger(v) || v < 1 || v > 500) {
+        throw new TypeError('sticker.collector.maxPerGroupPerDay 必须是 1–500 之间的整数');
+      }
+      co.maxPerGroupPerDay = v;
+    }
+    if (c.minSizeKB !== undefined) {
+      if (typeof c.minSizeKB !== 'number' || !Number.isFinite(c.minSizeKB)) {
+        throw new TypeError('sticker.collector.minSizeKB 必须是数字');
+      }
+      co.minSizeKB = c.minSizeKB;
+    }
+    if (c.maxSizeKB !== undefined) {
+      if (typeof c.maxSizeKB !== 'number' || !Number.isFinite(c.maxSizeKB)) {
+        throw new TypeError('sticker.collector.maxSizeKB 必须是数字');
+      }
+      co.maxSizeKB = c.maxSizeKB;
+    }
+    if (c.autoTag !== undefined) {
+      if (typeof c.autoTag !== 'boolean') throw new TypeError('sticker.collector.autoTag 必须是布尔值');
+      co.autoTag = c.autoTag;
+    }
+    out.collector = co;
+  }
+
+  // selector 子块
+  if (record.selector !== undefined && record.selector !== null) {
+    if (typeof record.selector !== 'object' || Array.isArray(record.selector)) {
+      throw new TypeError('sticker.selector 必须是对象');
+    }
+    const s = record.selector as Record<string, unknown>;
+    const so: Record<string, unknown> = {};
+    if (s.enabled !== undefined) {
+      if (typeof s.enabled !== 'boolean') throw new TypeError('sticker.selector.enabled 必须是布尔值');
+      so.enabled = s.enabled;
+    }
+    if (s.strategy !== undefined) {
+      if (typeof s.strategy !== 'string') throw new TypeError('sticker.selector.strategy 必须是字符串');
+      const allowed = ['hot', 'random', 'mood-match', 'topic-match', 'explore'];
+      if (!allowed.includes(s.strategy)) {
+        throw new TypeError(`sticker.selector.strategy 必须是 ${allowed.join(' / ')} 之一`);
+      }
+      so.strategy = s.strategy;
+    }
+    if (s.minIntervalSec !== undefined) {
+      if (typeof s.minIntervalSec !== 'number' || !Number.isFinite(s.minIntervalSec)) {
+        throw new TypeError('sticker.selector.minIntervalSec 必须是数字');
+      }
+      const v = s.minIntervalSec;
+      if (!Number.isInteger(v) || v < 0 || v > 3600) {
+        throw new TypeError('sticker.selector.minIntervalSec 必须是 0–3600 之间的整数');
+      }
+      so.minIntervalSec = v;
+    }
+    if (s.proactiveProbability !== undefined) {
+      if (typeof s.proactiveProbability !== 'number' || !Number.isFinite(s.proactiveProbability)) {
+        throw new TypeError('sticker.selector.proactiveProbability 必须是数字');
+      }
+      const v = s.proactiveProbability;
+      if (v < 0 || v > 1) {
+        throw new TypeError('sticker.selector.proactiveProbability 必须是 0–1 之间的小数');
+      }
+      so.proactiveProbability = v;
+    }
+    out.selector = so;
+  }
+
+  // evolver 子块
+  if (record.evolver !== undefined && record.evolver !== null) {
+    if (typeof record.evolver !== 'object' || Array.isArray(record.evolver)) {
+      throw new TypeError('sticker.evolver 必须是对象');
+    }
+    const e = record.evolver as Record<string, unknown>;
+    const eo: Record<string, unknown> = {};
+    if (e.enabled !== undefined) {
+      if (typeof e.enabled !== 'boolean') throw new TypeError('sticker.evolver.enabled 必须是布尔值');
+      eo.enabled = e.enabled;
+    }
+    if (e.checkIntervalHours !== undefined) {
+      if (typeof e.checkIntervalHours !== 'number' || !Number.isFinite(e.checkIntervalHours)) {
+        throw new TypeError('sticker.evolver.checkIntervalHours 必须是数字');
+      }
+      const v = e.checkIntervalHours;
+      if (!Number.isInteger(v) || v < 1 || v > 720) {
+        throw new TypeError('sticker.evolver.checkIntervalHours 必须是 1–720 之间的整数');
+      }
+      eo.checkIntervalHours = v;
+    }
+    if (e.minKeepCount !== undefined) {
+      if (typeof e.minKeepCount !== 'number' || !Number.isFinite(e.minKeepCount)) {
+        throw new TypeError('sticker.evolver.minKeepCount 必须是数字');
+      }
+      const v = e.minKeepCount;
+      if (!Number.isInteger(v) || v < 0 || v > 10000) {
+        throw new TypeError('sticker.evolver.minKeepCount 必须是 0–10000 之间的整数');
+      }
+      eo.minKeepCount = v;
+    }
+    out.evolver = eo;
+  }
+
+  // storage 子块 — 支持指定存放目录（imagesDir）和元数据路径（metadataPath）
+  if (record.storage !== undefined && record.storage !== null) {
+    if (typeof record.storage !== 'object' || Array.isArray(record.storage)) {
+      throw new TypeError('sticker.storage 必须是对象');
+    }
+    const st = record.storage as Record<string, unknown>;
+    const sto: Record<string, unknown> = {};
+    if (st.metadataPath !== undefined) {
+      if (typeof st.metadataPath !== 'string') throw new TypeError('sticker.storage.metadataPath 必须是字符串');
+      sto.metadataPath = st.metadataPath;
+    }
+    if (st.imagesDir !== undefined) {
+      if (typeof st.imagesDir !== 'string') throw new TypeError('sticker.storage.imagesDir 必须是字符串');
+      sto.imagesDir = st.imagesDir;
+    }
+    if (st.autoBackup !== undefined) {
+      if (typeof st.autoBackup !== 'boolean') throw new TypeError('sticker.storage.autoBackup 必须是布尔值');
+      sto.autoBackup = st.autoBackup;
+    }
+    if (st.backupRetention !== undefined) {
+      if (typeof st.backupRetention !== 'number' || !Number.isFinite(st.backupRetention)) {
+        throw new TypeError('sticker.storage.backupRetention 必须是数字');
+      }
+      const v = st.backupRetention;
+      if (!Number.isInteger(v) || v < 1 || v > 50) {
+        throw new TypeError('sticker.storage.backupRetention 必须是 1–50 之间的整数');
+      }
+      sto.backupRetention = v;
+    }
+    out.storage = sto;
+  }
+
+  return out;
 }
 
 /** API Key 长度上限（DashScope Key 远短于此值） */

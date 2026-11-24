@@ -525,9 +525,10 @@ export const ConfigSchema: Schema<ImQQBotConfig> = Schema.object({
       .description('进化引擎配置'),
     storage: Schema.object({
       metadataPath: Schema.string().default('').description('元数据路径（空 = ~/.dsh-qqbot/stickers.json）'),
+      imagesDir: Schema.string().default('').description('图片存放目录（空 = 复用 media；填了独立存储避免 TTL 清理）'),
       autoBackup: Schema.boolean().default(true).description('自动备份'),
       backupRetention: Schema.number().default(5).description('备份保留份数'),
-    }).default({ metadataPath: '', autoBackup: true, backupRetention: 5 })
+    }).default({ metadataPath: '', imagesDir: '', autoBackup: true, backupRetention: 5 })
       .description('存储配置'),
   }).description('表情包进化系统'),
 });

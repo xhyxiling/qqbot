@@ -16,10 +16,19 @@ import type { Sticker, StickerStorageConfig } from './types.ts';
 /** 存储根目录（与 persona archive 同层级） */
 export const STICKER_ROOT = resolve(homedir(), '.dsh-qqbot');
 
+/** 默认媒体附件目录（复用 attachment.ts 的 MEDIA_ROOT） */
+export const DEFAULT_IMAGES_DIR = resolve(STICKER_ROOT, 'media');
+
 /** 构建元数据路径 */
 export function resolveStickerMetadataPath(cfg: StickerStorageConfig): string {
   if (cfg.metadataPath) return resolve(cfg.metadataPath);
   return resolve(STICKER_ROOT, 'stickers.json');
+}
+
+/** 构建图片存储目录：空 = 复用 media（TTL 清理），指定 = 独立存储（永久保留） */
+export function resolveStickerImagesDir(cfg: StickerStorageConfig): string {
+  if (cfg.imagesDir) return resolve(cfg.imagesDir);
+  return DEFAULT_IMAGES_DIR;
 }
 
 /** 元数据文件 schema */
@@ -51,11 +60,15 @@ export class StickerStore {
   private stickers = new Map<string, Sticker>();
   private dirty = false;
   private readonly metadataPath: string;
+  private readonly imagesDir: string;
+  private readonly useIndependentDir: boolean;
   private readonly backupRetention: number;
   private readonly logger: Logger;
 
   constructor(config: StickerStorageConfig, logger: Logger) {
     this.metadataPath = resolveStickerMetadataPath(config);
+    this.imagesDir = resolveStickerImagesDir(config);
+    this.useIndependentDir = !!config.imagesDir; // true 表示指定了独立目录
     this.backupRetention = config.backupRetention;
     this.logger = logger;
   }
@@ -127,28 +140,56 @@ export class StickerStore {
 
   // ── CRUD ──
 
-  /** 尝试收藏一个表情；已存在则返回 existing，新增则返回新对象 */
+  /** 尝试收藏一个表情；已存在则返回 existing，新增则返回新对象
+   *  如果配置了独立 imagesDir，会把文件 copy 过去避免 media cleaner 清掉 */
   async tryAdd(sticker: Omit<Sticker, 'id' | 'useCount' | 'positiveReactions' | 'negativeReactions' | 'hotScore'>): Promise<Sticker | null> {
+    // 去重
     const id = await this.hashFile(sticker.filePath);
-
     const existing = this.stickers.get(id);
     if (existing) {
       this.logger.debug(`sticker-store: 表情已存在 ${id}`);
       return existing;
     }
 
+    // 如果配置了独立目录，把文件 copy 过去
+    let finalPath: string = sticker.filePath;
+    if (this.useIndependentDir) {
+      const copiedPath = await this.copyToIndependentDir(sticker.filePath, id);
+      if (copiedPath) {
+        finalPath = copiedPath;
+        this.logger.debug(`sticker-store: 已 copy 到独立目录 ${finalPath}`);
+      } else {
+        this.logger.warn(`sticker-store: copy 到独立目录失败，保留原路径 ${sticker.filePath}`);
+      }
+    }
+
     const full: Sticker = {
       ...sticker,
       id,
+      filePath: finalPath,
       useCount: 0,
       positiveReactions: 0,
       negativeReactions: 0,
-      hotScore: 50, // 初始中等热度
+      hotScore: 50,
     };
     this.stickers.set(id, full);
     this.markDirty();
-    this.logger.info(`sticker-store: + 收藏 ${id} (${sticker.filename})`);
+    this.logger.info(`sticker-store: + 收藏 ${id} (${full.filename})`);
     return full;
+  }
+
+  /** 把文件 copy 到独立存储目录（避免 media TTL 清理） */
+  private async copyToIndependentDir(srcPath: string, id: string): Promise<string | null> {
+    try {
+      await fs.mkdir(this.imagesDir, { recursive: true });
+      const ext = srcPath.split('.').pop()?.toLowerCase() ?? 'png';
+      const destPath = resolve(this.imagesDir, `${id}.${ext}`);
+      await fs.copyFile(srcPath, destPath);
+      return destPath;
+    } catch (err) {
+      this.logger.error(`sticker-store: copyFile 失败: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    }
   }
 
   get(id: string): Sticker | undefined {

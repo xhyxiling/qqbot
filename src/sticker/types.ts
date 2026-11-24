@@ -97,8 +97,11 @@ export interface StickerEvolverConfig {
 
 /** 存储子配置 */
 export interface StickerStorageConfig {
-  /** 元数据存储路径（默认 ~/.dsh-qqbot/stickers.json） */
+  /** 元数据存储路径（默认空 = ~/.dsh-qqbot/stickers.json） */
   metadataPath: string;
+  /** 图片存放目录（默认空 = ~/.dsh-qqbot/media，复用 QQ 附件下载目录）。
+   *  指定后 collector 会把收藏的图 copyFile 到这里（避免 media cleaner 清掉）。 */
+  imagesDir: string;
   /** 是否自动备份 */
   autoBackup: boolean;
   /** 备份保留份数 */
@@ -144,6 +147,7 @@ export const DEFAULT_STICKER_CONFIG: StickerConfig = {
   },
   storage: {
     metadataPath: '', // 运行时解析到 ~/.dsh-qqbot/stickers.json
+    imagesDir: '',    // 空 = 复用 ~/.dsh-qqbot/media；填了就独立存储
     autoBackup: true,
     backupRetention: 5,
   },

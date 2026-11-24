@@ -154,8 +154,50 @@ type ConfigWire = {
   personaAnalysis?: PersonaAnalysisWire;
   access?: AccessControlWire;
   voice?: VoiceWire;
+  sticker?: StickerWire;
   cwd?: string;
 };
+
+/** 表情包存储配置（与 src/sticker/types.ts 的 StickerStorageConfig 对应的局部投影） */
+interface StickerStorageWire {
+  metadataPath?: string;
+  imagesDir?: string;
+  autoBackup?: boolean;
+  backupRetention?: number;
+}
+
+/** 表情包收藏器配置 */
+interface StickerCollectorWire {
+  enabled?: boolean;
+  maxPerGroupPerDay?: number;
+  minSizeKB?: number;
+  maxSizeKB?: number;
+  autoTag?: boolean;
+}
+
+/** 表情包选择器配置 */
+interface StickerSelectorWire {
+  enabled?: boolean;
+  strategy?: 'hot' | 'random' | 'mood-match' | 'topic-match' | 'explore';
+  minIntervalSec?: number;
+  proactiveProbability?: number;
+}
+
+/** 表情包进化引擎配置 */
+interface StickerEvolverWire {
+  enabled?: boolean;
+  checkIntervalHours?: number;
+  minKeepCount?: number;
+}
+
+/** 表情包进化系统整体配置 */
+interface StickerWire {
+  enabled?: boolean;
+  collector?: StickerCollectorWire;
+  selector?: StickerSelectorWire;
+  evolver?: StickerEvolverWire;
+  storage?: StickerStorageWire;
+}
 
 /** 样式注入标记（幂等；版本变化时替换旧样式，避免客户端热更新后仍用旧样式） */
 const STYLE_ID = 'im-qqbot-config-panel-styles';
@@ -1188,7 +1230,7 @@ const SPLIT_OPTIONS: ReadonlyArray<{ value: ReplySplitMode; label: string }> = [
 ];
 
 /** 配置分区：每页只展示一组相关配置，避免单列过长 */
-type TabId = 'access' | 'identity' | 'members' | 'conversation' | 'voice' | 'model' | 'personas' | 'update';
+type TabId = 'access' | 'identity' | 'members' | 'conversation' | 'voice' | 'sticker' | 'model' | 'personas' | 'update';
 
 interface TabDef {
   id: TabId;
@@ -1206,6 +1248,7 @@ const TABS: ReadonlyArray<TabDef> = [
     keys: ['requireMention', 'streaming', 'replySplitMode', 'replySplitIntervalMs', 'showToolResults'],
   },
   { id: 'voice', label: '语音回复', keys: ['voice'] },
+  { id: 'sticker', label: '表情包进化', keys: ['sticker'] },
   { id: 'model', label: '模型与提示词', keys: ['provider', 'model', 'preset', 'globalPrompt'] },
   { id: 'personas', label: '人格预设', keys: ['personas', 'defaultPersona'] },
   // 插件更新不是配置项（keys 为空，永远不会出现「未保存」小圆点）
@@ -1859,6 +1902,172 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
       '语音走 DashScope 实时合成（需要 Node 22+ 内置 WebSocket）；合成失败时退回文字回复，消息不会丢。'),
   ];
 
+  // ── 表情包进化 ──
+  const sticker = form.sticker ?? {};
+  const stickerCollector = sticker.collector ?? {};
+  const stickerSelector = sticker.selector ?? {};
+  const stickerEvolver = sticker.evolver ?? {};
+  const stickerStorage = sticker.storage ?? {};
+
+  const stickerPanel: ReactNode[] = [
+    // 顶层开关
+    createElement('div', { className: 'imqb2-group-title' }, '总开关'),
+    createElement('div', { className: 'imqb2-field' },
+      createElement('div', { className: 'imqb2-head' },
+        createElement('span', { className: 'imqb2-label' }, '启用表情包进化系统'),
+        createElement(Switch, {
+          checked: sticker.enabled === true,
+          onChange: (v) => { patch('sticker', { ...sticker, enabled: v }); },
+        }),
+      ),
+      createElement('p', { className: 'imqb2-help' },
+        '关闭后 bot 不收藏群图片，也不注册 qqbot_pick_sticker 工具。已收藏的元数据保留。'),
+    ),
+
+    // 收藏器
+    createElement('div', { className: 'imqb2-group-title' }, '收藏器 — 自动收藏群聊图片'),
+    createElement('div', { className: 'imqb2-field' },
+      createElement('div', { className: 'imqb2-head' },
+        createElement('span', { className: 'imqb2-label' }, '启用自动收藏'),
+        createElement(Switch, {
+          checked: stickerCollector.enabled !== false,
+          onChange: (v) => {
+            patch('sticker', {
+              ...sticker,
+              collector: { ...stickerCollector, enabled: v },
+            });
+          },
+        }),
+      ),
+      createElement('p', { className: 'imqb2-help' },
+        '旁路异步收藏，不阻塞消息回复。QQ 下载完附件后自动提取 hash 去重入库。'),
+    ),
+    createElement(FieldRow, {
+      label: '每群每日最大收藏数', value: String(stickerCollector.maxPerGroupPerDay ?? 50),
+      placeholder: '50', help: '避免刷屏收藏，超过今日限额的群自动跳过。1–500。',
+      onChange: (v) => {
+        const n = parseInt(v, 10);
+        if (!isNaN(n) && n > 0 && n <= 500) {
+          patch('sticker', {
+            ...sticker,
+            collector: { ...stickerCollector, maxPerGroupPerDay: n },
+          });
+        }
+      },
+    }),
+
+    // 选择器
+    createElement('div', { className: 'imqb2-group-title' }, '选择器 — 智能挑选应景表情'),
+    createElement('div', { className: 'imqb2-field' },
+      createElement('span', { className: 'imqb2-label' }, '选择策略'),
+      createElement('select', {
+        className: 'imqb2-select',
+        value: stickerSelector.strategy ?? 'mood-match',
+        onChange: (event: ChangeEvent<HTMLSelectElement>) => {
+          patch('sticker', {
+            ...sticker,
+            selector: { ...stickerSelector, strategy: event.currentTarget.value },
+          });
+        },
+      },
+        createElement('option', { value: 'hot' }, '热度优先 — 用最热的表情'),
+        createElement('option', { value: 'random' }, '完全随机 — 均匀挑选'),
+        createElement('option', { value: 'mood-match' }, '情绪匹配 — 按当前聊天氛围选最搭的'),
+        createElement('option', { value: 'topic-match' }, '话题匹配 — 按话题关键词选（需模型理解）'),
+        createElement('option', { value: 'explore' }, '探索优先 — 优先展示低热度表情，帮它们涨曝光'),
+      ),
+      createElement('p', { className: 'imqb2-hint' },
+        'mood-match 最通用；想让冷门表情也有机会就选 explore。'),
+    ),
+    createElement(FieldRow, {
+      label: '主动冒泡概率',
+      value: String((stickerSelector.proactiveProbability ?? 0.15) * 100) + '%',
+      placeholder: '15',
+      help: '群聊正常对话时，模型有这个概率主动发一个表情（除了被 @ 的回应）。0% 表示只在被要求时发。填 0–100 的整数即可，保存时自动转小数。',
+      onChange: (v) => {
+        const n = parseInt(v.replace('%', ''), 10);
+        if (!isNaN(n) && n >= 0 && n <= 100) {
+          patch('sticker', {
+            ...sticker,
+            selector: { ...stickerSelector, proactiveProbability: n / 100 },
+          });
+        }
+      },
+    }),
+
+    // 进化引擎
+    createElement('div', { className: 'imqb2-group-title' }, '进化引擎 — 定期重算热度 + 淘汰'),
+    createElement('FieldRow', {
+      label: '进化检查间隔（小时）', value: String(stickerEvolver.checkIntervalHours ?? 24),
+      placeholder: '24', help: '每隔多久重算一次全库热度、淘汰低质量表情。1–720。',
+      onChange: (v) => {
+        const n = parseInt(v, 10);
+        if (!isNaN(n) && n >= 1 && n <= 720) {
+          patch('sticker', {
+            ...sticker,
+            evolver: { ...stickerEvolver, checkIntervalHours: n },
+          });
+        }
+      },
+    }),
+    createElement('FieldRow', {
+      label: '最少保留数量', value: String(stickerEvolver.minKeepCount ?? 50),
+      placeholder: '50', help: '淘汰时不会低于这个数量——哪怕热度都很低也留着，防止空库。0–10000。',
+      onChange: (v) => {
+        const n = parseInt(v, 10);
+        if (!isNaN(n) && n >= 0 && n <= 10000) {
+          patch('sticker', {
+            ...sticker,
+            evolver: { ...stickerEvolver, minKeepCount: n },
+          });
+        }
+      },
+    }),
+
+    // 存储
+    createElement('div', { className: 'imqb2-group-title' }, '存储 — 指定存放文件夹'),
+    createElement(FieldRow, {
+      label: '图片存放目录',
+      value: stickerStorage.imagesDir ?? '',
+      placeholder: '留空 = 复用 ~/.dsh-qqbot/media（媒体 TTL 清理会删）',
+      help: '填了之后收藏的图会被 copyFile 到这个目录，不再受 media cleaner 影响。用绝对路径最稳。',
+      onChange: (v) => {
+        patch('sticker', {
+          ...sticker,
+          storage: { ...stickerStorage, imagesDir: v },
+        });
+      },
+    }),
+    createElement(FieldRow, {
+      label: '元数据 JSON 路径',
+      value: stickerStorage.metadataPath ?? '',
+      placeholder: '留空 = ~/.dsh-qqbot/stickers.json',
+      help: '只存元数据（id/热度/标签等），不存图片本体。一般不需要改。',
+      onChange: (v) => {
+        patch('sticker', {
+          ...sticker,
+          storage: { ...stickerStorage, metadataPath: v },
+        });
+      },
+    }),
+    createElement('div', { className: 'imqb2-field' },
+      createElement('div', { className: 'imqb2-head' },
+        createElement('span', { className: 'imqb2-label' }, '自动备份元数据'),
+        createElement(Switch, {
+          checked: stickerStorage.autoBackup !== false,
+          onChange: (v) => {
+            patch('sticker', {
+              ...sticker,
+              storage: { ...stickerStorage, autoBackup: v },
+            });
+          },
+        }),
+      ),
+      createElement('p', { className: 'imqb2-help' },
+        '每次刷盘前自动把旧 stickers.json 拷成 stickers.{时间戳}.bak，防止写错。'),
+    ),
+  ];
+
   const modelPanel: ReactNode[] = [
     createElement('div', { className: 'imqb2-group-title' }, '模型'),
     createElement(FieldRow, {
@@ -2015,6 +2224,7 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
     members: membersPanel,
     conversation: conversationPanel,
     voice: voicePanel,
+    sticker: stickerPanel,
     model: modelPanel,
     personas: personasPanel,
     update: updatePanel,
