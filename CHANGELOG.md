@@ -10,6 +10,19 @@
 
 ### ✨ 新功能
 
+- **表情包进化系统（`sticker`）**：自动收藏群里的图片、智能选择并发送、持续学习进化。四模块协同：
+  - **StickerCollector**：从 QQ 已下载的媒体附件里自动收藏图片（旁路异步，不阻塞消息处理），文件内容 hash 去重，文件名自动提取标签，每群每日可限额。
+  - **StickerSelector**：5 种选择策略（`hot` / `random` / `mood-match` / `topic-match` / `explore`），按群做频率门控（间隔 + 连续发送限制），主动冒泡概率可调。
+  - **StickerEvolver**：定期（默认 24h）重算热度（使用次数 + 反馈 + 时间衰减 + 探索奖励），淘汰低热度表情，自动给缺标签的表情补标签。
+  - **StickerStore**：元数据 JSON 持久化到 `~/.dsh-qqbot/stickers.json`，自动备份（默认 5 份），进程退出时刷盘。
+  - **新工具 `qqbot_pick_sticker`**：模型可调用此工具从收藏库挑一个应景的表情，返回本地文件路径，直接传给 `qqbot_send_file`。
+  - **新工具 `qqbot_send_sticker`**：组合工具（简化版），pick + send 一步到位（内部仍需要 `qqbot_send_file` 兜底发送）。
+  - **配置入口**：`sticker.enabled`（默认 `false`，需显式开启）/ `sticker.collector` / `sticker.selector` / `sticker.evolver` / `sticker.storage`。每个子块都有独立开关 + 全量默认值，缺省可直接写 `sticker: { enabled: true }` 跑起来。
+  - **数据流**：群图片 → `attachment.ts` 下载 → `inbound.ts` 旁路收藏 → 入库 → 模型想回应时调 `qqbot_pick_sticker` → 得路径 → `qqbot_send_file` 发送。整个收藏逻辑与媒体下载 TTL 解耦：被 media cleaner 清掉的旧图 selector 会 `existsSync` 过滤。
+  - **反馈循环**：手动调用 `stickerEngine.evolver.recordFeedback(id, positive)` 可记录群友反应，热度即时更新；定期进化自动重算全库分数。
+
+### 🔧 变更
+
 - **群友人格档案（自动 + 手动）**：机器人按会话滚动保存群聊/私聊消息（本地 `~/.dsh-qqbot/persona-archive.json`）。某人累计发言达到阈值后**自动**生成/更新人格档案（结果存 `~/.dsh-qqbot/persona-profiles.json`）；也可在群里 @机器人 说「分析一下某某的性格」手动触发 `qqbot_analyze_persona`。**同一个人在不同群、群聊与私聊的发言会按 openid 合并**成一份档案。档案包含一句话印象、性格特点、说话风格、口头禅、兴趣、群内角色、相处建议与置信度，按结构化 JSON 保存，后续可直接作为新增人格预设的素材。
 - **群友人格配置（`personaAnalysis`）**：`enabled`（默认 `true`）/ `maxMessages`（默认 300，20–1000）/ `retentionDays`（默认 30，1–365）/ `autoAnalyze`（默认 `true`）/ `autoAnalyzeThreshold`（默认 20，5–200）。首次达到阈值时分析，之后每新增「阈值」条再更新一次；任务串行执行、同一人不重复排队，失败冷却 10 分钟、单次超时 120 秒，不阻塞消息回复。档案只存本机、不上传，关闭后停止记录新消息（已有档案保留，删除文件即可清空）。记录发生在访问控制之后、@ 门控之前，因此未 @bot 的群消息也会计入；机器人自己的消息、斜杠命令与空内容不记录。
 - **新增 `/人格分析` 命令（别名 `/persona-analysis`）**：群里先 @ 要分析的人再发命令（`@机器人 /人格分析 @某人`），按消息 mention 列表里的 `member_openid` 定位，昵称重名也不会认错；不带 @ 时可用昵称/openid 兜底，私聊里直接分析对方。命令直接返回人格档案 Markdown 并写入人格库，不依赖模型主动调工具；无对象时给用法提示与活跃群友快捷入口。仅管理员可用。为此给 `CommandDeps` 增加可选的 `persona` 服务（档案 + 人格库 + llm）。
