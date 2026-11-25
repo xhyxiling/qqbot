@@ -30,6 +30,8 @@ export interface Sticker {
   negativeReactions: number;
   /** 自动推断的标签 */
   tags: string[];
+  /** 视觉模型生成的一句话画面描述（如「橘猫翻白眼」），selector 匹配时也用 */
+  description?: string;
   /** 热度分数 (0-100) */
   hotScore: number;
   /** 质量评分 (1-5) */
@@ -64,6 +66,8 @@ export interface StickerCollectorConfig {
   maxPerGroupPerDay: number;
   /** 自动从文件名提取标签 */
   autoTag: boolean;
+  /** 收藏时是否调视觉模型生成画面描述（更准的 tags 来源） */
+  autoDescribe: boolean;
 }
 
 /** 选择子配置 */
@@ -128,6 +132,7 @@ export const DEFAULT_STICKER_CONFIG: StickerConfig = {
     maxSizeKB: 2048,
     maxPerGroupPerDay: 50,
     autoTag: true,
+    autoDescribe: true,
   },
   selector: {
     enabled: true,

@@ -15,10 +15,19 @@ import { StickerStore } from './storage.ts';
 import { StickerCollector } from './collector.ts';
 import { StickerSelector } from './selector.ts';
 import { StickerEvolver } from './evolver.ts';
+import type { VisionConfig } from '../config.ts';
+import type { DescribeImageServices } from '../media/describe-image.ts';
 
 export { DEFAULT_STICKER_CONFIG, StickerStore, StickerCollector, StickerSelector, StickerEvolver };
 export type { StickerConfig, StickerSelectionContext } from './types.ts';
 export type { EvolutionReport, EvolutionStatus } from './evolver.ts';
+export type { DescribeImageServices } from '../media/describe-image.ts';
+
+/** 视觉服务注入：llm + attachments 运行时 + vision 配置 */
+export interface StickerVisionDeps {
+  services: DescribeImageServices;
+  config: VisionConfig;
+}
 
 /**
  * 表情包引擎 — 一个聚合了收藏/选择/进化的高层对象
@@ -30,13 +39,16 @@ export class StickerEngine {
   readonly selector: StickerSelector;
   readonly evolver: StickerEvolver;
   private readonly logger: Logger;
+  private readonly vision?: StickerVisionDeps;
   private started = false;
+  private backfillTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(config: StickerConfig, logger: Logger) {
+  constructor(config: StickerConfig, logger: Logger, vision?: StickerVisionDeps) {
     this.logger = logger;
+    this.vision = vision;
 
     this.store = new StickerStore(config.storage, logger);
-    this.collector = new StickerCollector(config.collector, this.store, logger);
+    this.collector = new StickerCollector(config.collector, this.store, logger, vision);
     this.selector = new StickerSelector(config.selector, this.store, logger);
     this.evolver = new StickerEvolver(config.evolver, this.store, logger);
   }
@@ -54,10 +66,28 @@ export class StickerEngine {
 
     this.evolver.start();
     this.started = true;
+
+    // 启动 5 秒后：先补录有文件没记录的孤儿表情，再给缺描述的图补画面描述
+    // （不阻塞启动；失败仅 warn）
+    this.backfillTimer = setTimeout(() => {
+      this.collector.importOrphans(50)
+        .then((n) => {
+          if (n > 0) this.logger.info(`sticker-engine: 启动时补录 ${n} 张孤儿表情`);
+          return this.vision ? this.collector.backfillMissingDescriptions(30) : 0;
+        })
+        .catch((err) => {
+          this.logger.warn(`sticker-engine: 启动补录/补描述失败: ${err instanceof Error ? err.message : String(err)}`);
+        });
+    }, 5000);
   }
 
   /** 关闭（shutdown 时调用）— 刷盘 + 停定时器 */
   async dispose(): Promise<void> {
+    if (this.backfillTimer) {
+      clearTimeout(this.backfillTimer);
+      this.backfillTimer = null;
+    }
+    this.collector.cancelBackfill();
     this.evolver.stop();
     await this.store.flush();
     this.store.dispose();

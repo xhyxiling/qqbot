@@ -121,6 +121,7 @@ export async function handleInbound(
       mwState.downloadedFiles,
       scope === 'group' ? (msg.groupOpenid ?? undefined) : undefined,
       msg.senderId,
+      msg.content?.trim() || undefined,
     ).catch(() => { /* 收藏失败不影响主流程 */ });
   }
 

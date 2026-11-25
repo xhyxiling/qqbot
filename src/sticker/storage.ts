@@ -7,7 +7,7 @@
  * - 定期脏标记 + 退出前 flush，避免频繁写盘
  */
 import { promises as fs } from 'node:fs';
-import { basename, dirname, extname, join, resolve } from 'node:path';
+import { basename, dirname, extname, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import type { Logger } from '../types.ts';
@@ -80,16 +80,21 @@ export class StickerStore {
       const data = await fs.readFile(this.metadataPath, 'utf-8');
       const parsed = JSON.parse(data) as StickerStoreFile;
       let fixed = 0;
+      let tagsCleaned = 0;
       for (const s of parsed.stickers || []) {
         const repaired = await this.repairMetadataExt(s);
-        if (repaired) {
+        if (repaired !== s) {
           this.logger.info(`sticker-store: 修复扩展名 ${s.filePath} → ${repaired.filePath}`);
           fixed++;
         }
-        this.stickers.set(repaired.id, repaired);
+        const cleaned = this.cleanGarbageTags(repaired);
+        if (cleaned !== repaired) {
+          tagsCleaned++;
+        }
+        this.stickers.set(cleaned.id, cleaned);
       }
-      if (fixed > 0) {
-        this.logger.info(`sticker-store: 加载时修复了 ${fixed} 条元数据扩展名`);
+      if (fixed > 0 || tagsCleaned > 0) {
+        this.logger.info(`sticker-store: 加载时修复 ${fixed} 条扩展名、清理 ${tagsCleaned} 条垃圾标签`);
         this.markDirty();
       }
       this.logger.info(`sticker-store: 已加载 ${this.stickers.size} 个表情元数据`);
@@ -162,6 +167,18 @@ export class StickerStore {
     };
   }
 
+  /**
+   * 清理垃圾标签：过滤掉纯 hash（[0-9a-f]{8,}）和长数字（\d{10,}），
+   * 这些是旧版自动从文件名抽出来的无用标签。没变则返回原引用。
+   */
+  private cleanGarbageTags(s: Sticker): Sticker {
+    if (!s.tags || s.tags.length === 0) return s;
+    const isJunk = (w: string) => /^[0-9a-f]{8,}$/i.test(w) || /^\d{10,}$/.test(w);
+    const kept = s.tags.filter((t) => !isJunk(t));
+    if (kept.length === s.tags.length) return s;
+    return { ...s, tags: kept };
+  }
+
   /** 刷盘（退出前调用 + 定期自动调用） */
   async flush(): Promise<void> {
     if (!this.dirty) return;
@@ -196,6 +213,35 @@ export class StickerStore {
   async hashFile(filePath: string): Promise<string> {
     const buf = await fs.readFile(filePath);
     return createHash('sha256').update(buf).digest('hex').slice(0, 16);
+  }
+
+  /** 库里是否已收藏该文件（按 hash 去重），用于避免重复调 vision */
+  async alreadyHas(filePath: string): Promise<boolean> {
+    const id = await this.hashFile(filePath);
+    return this.stickers.has(id);
+  }
+
+  /** 给已收藏的图补写画面描述 + 合并标签（backfill 用） */
+  updateDescription(id: string, description: string, extraTags?: string[]): void {
+    const s = this.stickers.get(id);
+    if (!s) return;
+    const next: Sticker = { ...s, description: description.slice(0, 60) };
+    // 合并时也过滤垃圾标签（防御：s.tags 可能残留旧版 hash/时间戳）
+    const isJunk = (w: string) => /^[0-9a-f]{8,}$/i.test(w) || /^\d{10,}$/.test(w);
+    const kept = s.tags.filter((t) => !isJunk(t));
+    if (extraTags && extraTags.length > 0) {
+      const seen = new Set(kept.map((t) => t.toLowerCase()));
+      for (const t of extraTags) {
+        const tl = t.trim().toLowerCase();
+        if (tl.length >= 2 && tl.length <= 20 && !isJunk(tl) && !seen.has(tl)) {
+          seen.add(tl);
+          kept.push(tl);
+        }
+      }
+    }
+    next.tags = kept.slice(0, 8);
+    this.stickers.set(id, next);
+    this.markDirty();
   }
 
   /** 基于已有信息快速生成 ID（不读文件） */
@@ -262,6 +308,8 @@ export class StickerStore {
       // 用源文件的真实扩展名（可能已被下载层纠正）
       const rawExt = extname(srcPath).toLowerCase() || '.png';
       const destPath = resolve(this.imagesDir, `${id}${rawExt}`);
+      // 孤儿补录时源文件本来就在 imagesDir 里，同路径 copy 会报错，直接复用
+      if (resolve(srcPath) === destPath) return destPath;
       await fs.copyFile(srcPath, destPath);
       return destPath;
     } catch (err) {
@@ -270,12 +318,37 @@ export class StickerStore {
     }
   }
 
+  /** 图片独立存储目录（孤儿扫描用） */
+  get imagesDirPath(): string {
+    return this.imagesDir;
+  }
+
+  /** 是否配置了独立图片目录（只有独立目录才安全做孤儿扫描，media 目录是临时文件） */
+  get hasIndependentDir(): boolean {
+    return this.useIndependentDir;
+  }
+
   get(id: string): Sticker | undefined {
     return this.stickers.get(id);
   }
 
   all(): Sticker[] {
     return Array.from(this.stickers.values());
+  }
+
+  /**
+   * 按收藏时间编号（#1 最早）— 编号稳定，不受热度/使用次数变化影响，
+   * 这样 prompt 里列出的 #N 与 send_sticker 的 sticker_no 始终对应同一张图。
+   */
+  numbered(): Array<{ no: number; sticker: Sticker }> {
+    return [...this.stickers.values()]
+      .sort((a, b) => a.firstCollectedAt - b.firstCollectedAt || a.id.localeCompare(b.id))
+      .map((sticker, i) => ({ no: i + 1, sticker }));
+  }
+
+  /** 按编号取表情 */
+  byNo(no: number): Sticker | undefined {
+    return this.numbered().find((x) => x.no === no)?.sticker;
   }
 
   /** 按条件查找第一个 */

@@ -502,7 +502,8 @@ export const ConfigSchema: Schema<ImQQBotConfig> = Schema.object({
       maxSizeKB: Schema.number().default(2048).description('最大图片大小 KB'),
       maxPerGroupPerDay: Schema.number().default(50).description('每群每天最多收藏'),
       autoTag: Schema.boolean().default(true).description('自动从文件名提取标签'),
-    }).default({ enabled: true, watchGroups: [], skipSenders: [], minSizeKB: 5, maxSizeKB: 2048, maxPerGroupPerDay: 50, autoTag: true })
+      autoDescribe: Schema.boolean().default(true).description('收藏时调视觉模型生成画面描述（更准的 tags 来源，需 vision 已启用）'),
+    }).default({ enabled: true, watchGroups: [], skipSenders: [], minSizeKB: 5, maxSizeKB: 2048, maxPerGroupPerDay: 50, autoTag: true, autoDescribe: true })
       .description('收藏器配置'),
     selector: Schema.object({
       enabled: Schema.boolean().default(true).description('选择器开关'),

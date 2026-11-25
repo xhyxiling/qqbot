@@ -47,6 +47,8 @@ import { resolveActiveVoiceSettings } from '../voice/voice-config.ts';
 import { buildVoiceOptions } from '../voice/voice-presets.ts';
 import { buildVoicePromptSection } from '../voice/voice-prompt.ts';
 import { VOICE_TOOL_NAME } from '../voice/voice-tool.ts';
+import { buildStickerPromptSection } from '../sticker/prompt.ts';
+import { getActiveStickerEngine } from '../sticker/index.ts';
 import type { QuestionChannel } from '../features/question-channel.ts';
 import type { ApprovalChannel } from '../features/approval-channel.ts';
 import type {
@@ -209,7 +211,21 @@ export class SessionManager {
         personaVoice: persona?.expressions?.voice,
         voiceOptions: buildVoiceOptions(this.config.voice?.presets, this.config.voice?.model),
       });
-      const ordered = [identitySection, memorySection, voiceSection].filter(
+      // 表情包说明（order 89）：只有图库里有东西时才注入，告诉模型何时该发、
+      // 何时不该发以及剂量——否则它要么想不起来用，要么连着刷。
+      const stickerEngine = getActiveStickerEngine();
+      const allStickers = stickerEngine?.store.all() ?? [];
+      // 用稳定编号（按收藏时间）注入，prompt 里的 #N 与 send_sticker 的 sticker_no 一一对应
+      const stickerCatalog = stickerEngine?.store.numbered().map(({ no, sticker }) => ({
+        no,
+        description: sticker.description,
+        tags: sticker.tags,
+      })) ?? [];
+      const stickerSection = buildStickerPromptSection({
+        total: allStickers.length,
+        catalog: stickerCatalog,
+      });
+      const ordered = [identitySection, memorySection, voiceSection, stickerSection].filter(
         (section): section is PromptSection => section !== undefined,
       );
       for (const section of ordered) {

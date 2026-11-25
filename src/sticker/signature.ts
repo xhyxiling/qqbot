@@ -4,7 +4,7 @@
  * 共享给 transport/attachment.ts（下载后纠正本地缓存扩展名）
  * 和 sticker 模块（元数据写入时纠正路径扩展名）。
  */
-import { basename, extname, join, dirname } from "node:path";
+import { basename, extname } from "node:path";
 
 /** 允许的图片扩展名 */
 export const IMAGE_EXTS = new Set([
@@ -23,7 +23,7 @@ export const SIGNATURE_MAP: Array<{
   ext: string;
   mime: string;
 }> = [
-  { sig: "474946383761", len: 6, ext: ".gif", mime: "image/gif" }, // GIF87a
+  { sig: "47494638", len: 6, ext: ".gif", mime: "image/gif" }, // GIF87a / GIF89a
   { sig: "89504e470d0a1a0a", len: 8, ext: ".png", mime: "image/png" }, // PNG
   { sig: "ffd8ff", len: 3, ext: ".jpg", mime: "image/jpeg" }, // JPEG
   { sig: "424d", len: 2, ext: ".bmp", mime: "image/bmp" }, // BMP

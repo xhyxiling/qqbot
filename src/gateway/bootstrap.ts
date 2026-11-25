@@ -37,8 +37,8 @@ import { createVoiceSpeaker } from '../voice/voice-reply.ts';
 import { resolveActiveVoiceSettings } from '../voice/voice-config.ts';
 import { buildVoiceOptions } from '../voice/voice-presets.ts';
 import { registerVoiceTool, VOICE_TOOL_NAME } from '../voice/voice-tool.ts';
-import { StickerEngine, mergeStickerConfig, registerStickerEngine } from '../sticker/index.ts';
-import { registerStickerTools, registerSendStickerTool, registerSaveStickerTool } from '../sticker/tools.ts';
+import { StickerEngine, mergeStickerConfig, registerStickerEngine, type StickerVisionDeps } from '../sticker/index.ts';
+import { registerStickerTools, registerSendStickerTool, registerSaveStickerTool, registerListStickerTool, registerUpdateStickerTool } from '../sticker/tools.ts';
 import type { StickerConfig } from '../sticker/types.ts';
 
 /**
@@ -167,7 +167,7 @@ export async function bootstrapGateway(
   };
 
   /** 把 ReplyTarget 裁剪到 { scope, targetId } — 去掉 msgId/eventId 避免群聊自动 @ */
-  function mediaScopeOnly(target: typeof resolveReplyTarget extends (...args: infer A) => ReplyTarget ? ReplyTarget : any) {
+  function mediaScopeOnly(target: ReturnType<typeof resolveReplyTarget>) {
     return { scope: target.scope, targetId: target.targetId };
   }
 
@@ -179,7 +179,13 @@ export async function bootstrapGateway(
   let stickerEngine: StickerEngine | undefined;
   if (stickerEnabled) {
     const stickerConfig = mergeStickerConfig(config.sticker ?? {} as Partial<StickerConfig>);
-    stickerEngine = new StickerEngine(stickerConfig, logger);
+    // 注入 vision 服务：收藏时调视觉模型生成画面描述 + 标签
+    const attachments = ctx.get('attachments') as { saveImage?: unknown } | undefined;
+    const visionDeps: StickerVisionDeps | undefined =
+      stickerConfig.collector.autoDescribe && llm?.stream && attachments?.saveImage && config.vision?.enabled
+        ? { services: { llm, attachments: attachments as never }, config: config.vision }
+        : undefined;
+    stickerEngine = new StickerEngine(stickerConfig, logger, visionDeps);
     await stickerEngine.start();
 
     // 注册到模块级 holder（Cordis Context 不能直接挂属性）
@@ -189,6 +195,8 @@ export async function bootstrapGateway(
     registerStickerTools(ctx, stickerEngine, manager, config, logger);
     registerSendStickerTool(ctx, stickerEngine, mediaSender, manager, config, logger);
     registerSaveStickerTool(ctx, stickerEngine, manager, config, logger);
+    registerListStickerTool(ctx, stickerEngine, manager, config, logger);
+    registerUpdateStickerTool(ctx, stickerEngine, manager, config, logger);
 
     console.log('[im-qqbot] Sticker engine enabled ✨');
   } else {
