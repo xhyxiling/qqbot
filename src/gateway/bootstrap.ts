@@ -182,7 +182,7 @@ export async function bootstrapGateway(
 
     // 注册工具（模型可调用 qqbot_pick_sticker / qqbot_save_sticker / qqbot_send_sticker）
     registerStickerTools(ctx, stickerEngine, logger);
-    registerSendStickerTool(ctx, stickerEngine, mediaSender, logger);
+    registerSendStickerTool(ctx, stickerEngine, mediaSender, manager, logger);
     registerSaveStickerTool(ctx, stickerEngine, manager, config, logger);
 
     console.log('[im-qqbot] Sticker engine enabled ✨');

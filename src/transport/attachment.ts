@@ -94,6 +94,23 @@ function formatSize(bytes: number): string {
   return `${bytes}B`;
 }
 
+/** 按图片文件头纠正扩展名（QQ 的 filename 可能与实际内容不一致） */
+function correctImageExtension(filePath: string, buf: Buffer): string {
+  const signature = buf.subarray(0, 12).toString('hex');
+  let actualExt: string | null = null;
+  if (signature.startsWith('474946383761') || signature.startsWith('474946383961')) actualExt = '.gif';
+  else if (signature.startsWith('89504e470d0a1a0a')) actualExt = '.png';
+  else if (signature.startsWith('ffd8ff')) actualExt = '.jpg';
+  else if (signature.startsWith('52494646') && buf.toString('ascii', 8, 12) === 'WEBP') actualExt = '.webp';
+  else if (signature.startsWith('424d')) actualExt = '.bmp';
+  if (!actualExt) return filePath;
+
+  const currentExt = extname(filePath).toLowerCase();
+  if (currentExt === actualExt || (actualExt === '.jpg' && currentExt === '.jpeg')) return filePath;
+  const stem = currentExt ? filePath.slice(0, -currentExt.length) : filePath;
+  return `${stem}${actualExt}`;
+}
+
 // ── SSRF 防护：阻断解析到私有/保留地址的下载 ──
 
 const PRIVATE_RANGES: Array<[netmask: bigint, prefix: number]> = [
@@ -148,9 +165,8 @@ async function assertSafeHostname(hostname: string): Promise<string> {
 function downloadViaHttps(
   url: string,
   ip: string,
-  destPath: string,
   maxBytes: number,
-): Promise<number> {
+): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
     const req = https.request({
@@ -180,11 +196,7 @@ function downloadViaHttps(
         }
         chunks.push(chunk);
       });
-      res.on('end', () => {
-        const buf = Buffer.concat(chunks);
-        writeFileSync(destPath, buf);
-        resolve(buf.length);
-      });
+      res.on('end', () => resolve(Buffer.concat(chunks)));
       res.on('error', reject);
     });
     req.on('error', reject);
@@ -194,7 +206,7 @@ function downloadViaHttps(
 }
 
 /** 安全下载：仅 HTTPS + SSRF 防护 + 大小上限 + 超时 */
-async function download(url: string, destPath: string, maxBytes: number): Promise<number> {
+async function download(url: string, maxBytes: number): Promise<Buffer> {
   const parsed = new URL(normalizeUrl(url));
   if (parsed.protocol !== 'https:') {
     throw new Error(`Only HTTPS allowed: ${parsed.protocol}`);
@@ -202,7 +214,7 @@ async function download(url: string, destPath: string, maxBytes: number): Promis
   // 解析 hostname → 拿到一个可达的 IPv4（SSRF 防护已在内部做）
   const ip = await assertSafeHostname(parsed.hostname);
   // 用 https.request 指定 IP 连接（绕过 fetch 内置 DNS），避免 Windows 某些环境 DNS 异常
-  return await downloadViaHttps(url, ip, destPath, maxBytes);
+  return await downloadViaHttps(url, ip, maxBytes);
 }
 
 /**
@@ -230,7 +242,7 @@ export async function downloadMediaAttachments(
   const results: DownloadedFile[] = [];
   for (const att of targets) {
     const contentType = classifyContentType(att.content_type) as 'image' | 'video' | 'file';
-    const localPath = toPosixPath(join(MEDIA_ROOT, uniqueFilename(att.filename)));
+    let localPath = toPosixPath(join(MEDIA_ROOT, uniqueFilename(att.filename)));
 
     if (att.size > maxBytes) {
       logger.debug(`im-qqbot: skip download (${att.size}B too large): ${att.filename}`);
@@ -239,7 +251,10 @@ export async function downloadMediaAttachments(
 
     let bytes: number;
     try {
-      bytes = await download(att.url, localPath, maxBytes);
+      const buf = await download(att.url, maxBytes);
+      if (contentType === 'image') localPath = correctImageExtension(localPath, buf);
+      writeFileSync(localPath, buf);
+      bytes = buf.length;
     } catch (err) {
       logger.warn(`im-qqbot: download failed: ${att.filename} — ${err instanceof Error ? err.message : String(err)}`);
       continue; // 下载失败不加入结果，由 buildDynamicCtx 回退为描述
