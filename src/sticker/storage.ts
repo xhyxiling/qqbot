@@ -206,14 +206,25 @@ export class StickerStore {
   // ── CRUD ──
 
   /** 尝试收藏一个表情；已存在则返回 existing，新增则返回新对象
-   *  如果配置了独立 imagesDir，会把文件 copy 过去避免 media cleaner 清掉 */
+   *  如果配置了独立 imagesDir，会把文件 copy 过去避免 media cleaner 清掉
+   *
+   *  去重策略：按新文件的 hash 匹配。如果 Map 里有同 hash 记录但指向的文件
+   *  已经不存在（脏记录），先删除旧记录再走添加流程。 */
   async tryAdd(sticker: Omit<Sticker, 'id' | 'useCount' | 'positiveReactions' | 'negativeReactions' | 'hotScore'>): Promise<Sticker | null> {
     // 去重
     const id = await this.hashFile(sticker.filePath);
     const existing = this.stickers.get(id);
     if (existing) {
-      this.logger.debug(`sticker-store: 表情已存在 ${id}`);
-      return existing;
+      // 命中旧记录，但旧记录指向的文件可能已被 TTL / 手动删除
+      const alive = await this.fileExists(existing.filePath);
+      if (alive) {
+        this.logger.debug(`sticker-store: 表情已存在 ${id}`);
+        return existing;
+      }
+      // 脏记录：删除，继续走添加流程（会重新 copy 到独立目录）
+      this.logger.info(`sticker-store: 清理脏记录 ${id}（文件已不存在 ${existing.filePath}）`);
+      this.stickers.delete(id);
+      this.markDirty();
     }
 
     // 如果配置了独立目录，把文件 copy 过去
