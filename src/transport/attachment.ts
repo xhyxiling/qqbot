@@ -14,6 +14,7 @@ import * as https from 'node:https';
 import type { Logger, RawAttachment } from '../types.ts';
 import type { MediaConfig } from '../config.ts';
 import { MEDIA_ROOT } from '../media/media-cleaner.ts';
+import { correctPathExt } from '../sticker/signature.ts';
 
 /** 默认富媒体下载大小上限（MB），可被 media.maxMB 覆盖 */
 const DEFAULT_MAX_MB = 200;
@@ -94,22 +95,8 @@ function formatSize(bytes: number): string {
   return `${bytes}B`;
 }
 
-/** 按图片文件头纠正扩展名（QQ 的 filename 可能与实际内容不一致） */
-function correctImageExtension(filePath: string, buf: Buffer): string {
-  const signature = buf.subarray(0, 12).toString('hex');
-  let actualExt: string | null = null;
-  if (signature.startsWith('474946383761') || signature.startsWith('474946383961')) actualExt = '.gif';
-  else if (signature.startsWith('89504e470d0a1a0a')) actualExt = '.png';
-  else if (signature.startsWith('ffd8ff')) actualExt = '.jpg';
-  else if (signature.startsWith('52494646') && buf.toString('ascii', 8, 12) === 'WEBP') actualExt = '.webp';
-  else if (signature.startsWith('424d')) actualExt = '.bmp';
-  if (!actualExt) return filePath;
-
-  const currentExt = extname(filePath).toLowerCase();
-  if (currentExt === actualExt || (actualExt === '.jpg' && currentExt === '.jpeg')) return filePath;
-  const stem = currentExt ? filePath.slice(0, -currentExt.length) : filePath;
-  return `${stem}${actualExt}`;
-}
+/** 纠正路径扩展名 — 如果路径后缀与真实格式不一致，返回纠正后的路径 */
+const correctImageExtension = correctPathExt;
 
 // ── SSRF 防护：阻断解析到私有/保留地址的下载 ──
 

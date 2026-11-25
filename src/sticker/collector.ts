@@ -16,6 +16,7 @@ import { classifyContentType, type DownloadedFile } from '../transport/attachmen
 import type { StickerCollectorConfig } from './types.ts';
 import { StickerStore } from './storage.ts';
 import type { Sticker } from './types.ts';
+import { correctPathExt, correctBasenameExt, detectImageExt } from './signature.ts';
 
 /** 允许的扩展名（与 QQ 网关一致） */
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']);
@@ -47,25 +48,29 @@ export class StickerCollector {
    */
   async collectFile(filePath: string, source?: { groupId?: string; senderId?: string }): Promise<Sticker | null> {
     if (!this.config.enabled) return null;
+    let buf: Buffer;
     try {
-      await fs.access(filePath);
+      buf = await fs.readFile(filePath);
     } catch {
       return null;
     }
 
-    const ext = extname(filePath).toLowerCase();
-    if (!IMAGE_EXTS.has(ext)) return null;
+    // 按真实文件头纠正路径扩展名
+    const correctedPath = correctPathExt(filePath, buf);
+    const correctedName = correctBasenameExt(filePath, buf);
+    const detected = detectImageExt(buf);
+    if (!detected) return null;
 
     const stat = await fs.stat(filePath);
     const sizeKB = stat.size / 1024;
     if (sizeKB < this.config.minSizeKB || sizeKB > this.config.maxSizeKB) return null;
 
-    const tags = this.config.autoTag ? this.extractTags(filePath) : [];
+    const tags = this.config.autoTag ? this.extractTags(correctedPath) : [];
 
     const added = await this.store.tryAdd({
-      filePath,
-      filename: basename(filePath),
-      mimeType: guessMime(ext),
+      filePath: correctedPath,
+      filename: correctedName,
+      mimeType: detected.mime,
       size: stat.size,
       sourceGroup: source?.groupId,
       sourceSender: source?.senderId,

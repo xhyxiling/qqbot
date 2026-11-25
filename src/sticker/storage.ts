@@ -7,11 +7,12 @@
  * - 定期脏标记 + 退出前 flush，避免频繁写盘
  */
 import { promises as fs } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, extname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import type { Logger } from '../types.ts';
 import type { Sticker, StickerStorageConfig } from './types.ts';
+import { IMAGE_EXTS, correctPathExt, correctBasenameExt, detectImageExt } from './signature.ts';
 
 /** 存储根目录（与 persona archive 同层级） */
 export const STICKER_ROOT = resolve(homedir(), '.dsh-qqbot');
@@ -73,13 +74,23 @@ export class StickerStore {
     this.logger = logger;
   }
 
-  /** 加载（构造后立即调用） */
+  /** 加载（构造后立即调用）— 附带元数据自恢复 */
   async load(): Promise<void> {
     try {
       const data = await fs.readFile(this.metadataPath, 'utf-8');
       const parsed = JSON.parse(data) as StickerStoreFile;
+      let fixed = 0;
       for (const s of parsed.stickers || []) {
-        this.stickers.set(s.id, s);
+        const repaired = await this.repairMetadataExt(s);
+        if (repaired) {
+          this.logger.info(`sticker-store: 修复扩展名 ${s.filePath} → ${repaired.filePath}`);
+          fixed++;
+        }
+        this.stickers.set(repaired.id, repaired);
+      }
+      if (fixed > 0) {
+        this.logger.info(`sticker-store: 加载时修复了 ${fixed} 条元数据扩展名`);
+        this.markDirty();
       }
       this.logger.info(`sticker-store: 已加载 ${this.stickers.size} 个表情元数据`);
     } catch {
@@ -95,6 +106,60 @@ export class StickerStore {
         dailyCountMap.clear();
       }, 24 * 60 * 60 * 1000);
     }
+  }
+
+  /**
+   * 尝试纠正一条 Sticker 元数据的扩展名：
+   *   - 首选：读取文件头，按真实格式纠正 filePath/filename/mimeType
+   *   - 次选：原路径不存在，但换个扩展名可能存在（.jpg ↔ .gif/.png/.webp）
+   * 返回纠正后的 Sticker；无法修复时返回原值不变。
+   */
+  private async repairMetadataExt(s: Sticker): Promise<Sticker> {
+    try {
+      let buf: Buffer;
+      try {
+        buf = await fs.readFile(s.filePath);
+      } catch {
+        // 原路径不存在 → 尝试同目录换扩展名
+        const stem = s.filePath.slice(0, -extname(s.filePath).length);
+        for (const ext of IMAGE_EXTS) {
+          if (ext === extname(s.filePath).toLowerCase()) continue;
+          const tryPath = stem + ext;
+          try {
+            buf = await fs.readFile(tryPath);
+            const repaired = {
+              ...s,
+              filePath: tryPath,
+              filename: basename(tryPath),
+            };
+            // 继续按文件头再纠正一次
+            return this.applySignatureFix(repaired, buf);
+          } catch {
+            // 试下一个扩展名
+          }
+        }
+        // 所有候选都不存在，放弃修复
+        return s;
+      }
+      return this.applySignatureFix(s, buf);
+    } catch {
+      return s;
+    }
+  }
+
+  /** 按文件头纠正扩展名 + MIME（路径本身已存在但后缀不对） */
+  private applySignatureFix(s: Sticker, buf: Buffer): Sticker {
+    const detected = detectImageExt(buf);
+    if (!detected) return s;
+    const correctedPath = correctPathExt(s.filePath, buf);
+    const correctedName = correctBasenameExt(s.filePath, buf);
+    if (correctedPath === s.filePath && s.mimeType === detected.mime) return s;
+    return {
+      ...s,
+      filePath: correctedPath,
+      filename: correctedName,
+      mimeType: detected.mime,
+    };
   }
 
   /** 刷盘（退出前调用 + 定期自动调用） */
@@ -178,12 +243,14 @@ export class StickerStore {
     return full;
   }
 
-  /** 把文件 copy 到独立存储目录（避免 media TTL 清理） */
+  /** 把文件 copy 到独立存储目录（避免 media TTL 清理）
+   *  — 复制后目标文件可能是纠正过扩展名的（collector 传进来的 localPath 可能已纠正） */
   private async copyToIndependentDir(srcPath: string, id: string): Promise<string | null> {
     try {
       await fs.mkdir(this.imagesDir, { recursive: true });
-      const ext = srcPath.split('.').pop()?.toLowerCase() ?? 'png';
-      const destPath = resolve(this.imagesDir, `${id}.${ext}`);
+      // 用源文件的真实扩展名（可能已被下载层纠正）
+      const rawExt = extname(srcPath).toLowerCase() || '.png';
+      const destPath = resolve(this.imagesDir, `${id}${rawExt}`);
       await fs.copyFile(srcPath, destPath);
       return destPath;
     } catch (err) {
