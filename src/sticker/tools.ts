@@ -32,6 +32,8 @@ export const SEND_STICKER_TOOL_NAME = 'qqbot_send_sticker';
 export function registerStickerTools(
   ctx: Context,
   engine: StickerEngine,
+  manager: SessionManagerLike,
+  config: ImQQBotConfig,
   logger: Logger,
 ): void {
   const tools = ctx.get('tools') as ToolsRegistryLike | undefined;
@@ -84,7 +86,23 @@ export function registerStickerTools(
         return [{ type: 'text', text: `🎲 挑到了 ${v.filename} → ${v.filePath}` }];
       },
     },
-    async execute(args: unknown): Promise<Record<string, unknown>> {
+    async execute(
+      args: unknown,
+      exec: { agent?: unknown },
+    ): Promise<Record<string, unknown>> {
+      // 权限门控：qqbot_pick_sticker 返回内部 filePath，owner/admin 才能用
+      const record = exec.agent === undefined
+        ? undefined
+        : manager.findByAgent(exec.agent);
+      if (record) {
+        const identity = config.identity;
+        const ownerOpenIds = identity?.ownerOpenIds ?? [];
+        const adminOpenIds = identity?.adminOpenIds ?? [];
+        if (identity?.enabled && !ownerOpenIds.includes(record.senderId) && !adminOpenIds.includes(record.senderId)) {
+          return { picked: false, reason: '这个功能只有主人或管理员才能用哦～' };
+        }
+      }
+
       const a = args as { topic?: string; mood?: string };
 
       const selCtx: StickerSelectionContext = {
@@ -123,6 +141,7 @@ export function registerSendStickerTool(
   engine: StickerEngine,
   mediaSender: MediaSenderLike,
   manager: SessionManagerLike,
+  config: ImQQBotConfig,
   logger: Logger,
 ): void {
   const tools = ctx.get('tools') as ToolsRegistryLike | undefined;
@@ -132,7 +151,8 @@ export function registerSendStickerTool(
     name: SEND_STICKER_TOOL_NAME,
     description:
       '从表情包收藏库挑选并直接发送一个应景的表情到当前 QQ 会话。'
-      + '等于 qqbot_pick_sticker + qqbot_send_file 的组合，一次调用完成。',
+      + '等于 qqbot_pick_sticker + qqbot_send_file 的组合，一次调用完成。'
+      + '⚠️ 只有主人（owner）或管理员（admin）能调用，普通成员会被拒绝。',
     parameters: {
       type: 'object',
       properties: {
@@ -169,13 +189,23 @@ export function registerSendStickerTool(
       args: unknown,
       exec: { agent?: unknown },
     ): Promise<Record<string, unknown>> {
-      const replyTarget = exec.agent === undefined
+      const record = exec.agent === undefined
         ? undefined
-        : manager.findByAgent(exec.agent)?.replyTarget;
-      if (!replyTarget) {
+        : manager.findByAgent(exec.agent);
+      if (!record) {
         return { sent: false, reason: '只能在 QQ 会话里使用这个工具' };
       }
 
+      // 权限门控：只有主人/admin 能让 bot 主动发表情
+      const identity = config.identity;
+      const ownerOpenIds = identity?.ownerOpenIds ?? [];
+      const adminOpenIds = identity?.adminOpenIds ?? [];
+      if (identity?.enabled && !ownerOpenIds.includes(record.senderId) && !adminOpenIds.includes(record.senderId)) {
+        logger.info(`send_sticker 被拒绝: senderId=${record.senderId} 不是 owner/admin`);
+        return { sent: false, reason: '只有主人或管理员才能让我发表情哦～' };
+      }
+
+      const replyTarget = record.replyTarget;
       const a = args as { topic?: string; mood?: string };
       const sticker = engine.selector.pick({
         topic: a.topic ?? '',

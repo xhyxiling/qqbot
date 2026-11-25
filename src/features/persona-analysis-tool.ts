@@ -200,6 +200,14 @@ export function registerPersonaAnalysisTool(
         throw new Error(`${PERSONA_ANALYSIS_TOOL_NAME}: 只能在 QQ 会话里分析（找不到当前会话）`);
       }
 
+      // 权限门控：群友人格档案是敏感数据，owner/admin 才能查
+      const identity = config.identity;
+      const ownerOpenIds = identity?.ownerOpenIds ?? [];
+      const adminOpenIds = identity?.adminOpenIds ?? [];
+      if (identity?.enabled && !ownerOpenIds.includes(record.senderId) && !adminOpenIds.includes(record.senderId)) {
+        throw new Error(`${PERSONA_ANALYSIS_TOOL_NAME}: 这个功能只有主人或管理员才能用哦～`);
+      }
+
       const members = archive.membersAll();
       if (members.length === 0) {
         throw new Error(
