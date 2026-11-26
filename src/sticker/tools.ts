@@ -7,6 +7,7 @@ import type { Logger, ReplyTarget } from '../types.ts';
 import type { ImQQBotConfig } from '../config.ts';
 import { sendMediaFile, type MediaSenderLike } from '../media/send-media.ts';
 import { StickerEngine, type StickerSelectionContext, getLatestSessionAttachment } from './index.ts';
+import { isOwnerOrAdmin } from '../identity/role.ts';
 import type { Sticker } from './types.ts';
 import { existsSync, statSync } from 'node:fs';
 
@@ -97,13 +98,8 @@ export function registerStickerTools(
       const record = exec.agent === undefined
         ? undefined
         : manager.findByAgent(exec.agent);
-      if (record) {
-        const identity = config.identity;
-        const ownerOpenIds = identity?.ownerOpenIds ?? [];
-        const adminOpenIds = identity?.adminOpenIds ?? [];
-        if (identity?.enabled && !ownerOpenIds.includes(record.senderId) && !adminOpenIds.includes(record.senderId)) {
-          return { picked: false, reason: '这个功能只有主人或管理员才能用哦～' };
-        }
+      if (record && !isOwnerOrAdmin(record.senderId, config.identity)) {
+        return { picked: false, reason: '这个功能只有主人或管理员才能用哦～' };
       }
 
       const a = args as { topic?: string; mood?: string };
@@ -233,10 +229,7 @@ export function registerListStickerTool(
         return { listed: false, reason: '只能在 QQ 会话里使用这个工具' };
       }
 
-      const identity = config.identity;
-      const ownerOpenIds = identity?.ownerOpenIds ?? [];
-      const adminOpenIds = identity?.adminOpenIds ?? [];
-      if (identity?.enabled && !ownerOpenIds.includes(record.senderId) && !adminOpenIds.includes(record.senderId)) {
+      if (!isOwnerOrAdmin(record.senderId, config.identity)) {
         return { listed: false, reason: '只有主人或管理员才能查看表情包图库' };
       }
 
@@ -329,10 +322,7 @@ export function registerUpdateStickerTool(
       }
 
       // 权限门控：图库属于内部数据，只有主人/admin 能改
-      const identity = config.identity;
-      const ownerOpenIds = identity?.ownerOpenIds ?? [];
-      const adminOpenIds = identity?.adminOpenIds ?? [];
-      if (identity?.enabled && !ownerOpenIds.includes(record.senderId) && !adminOpenIds.includes(record.senderId)) {
+      if (!isOwnerOrAdmin(record.senderId, config.identity)) {
         return { updated: false, reason: '只有主人或管理员才能修改表情包元数据' };
       }
 
@@ -582,12 +572,7 @@ export function registerSaveStickerTool(
       }
 
       // 检查 sender 是否在 owner/admin 名单里
-      const identity = config.identity;
-      const ownerOpenIds = identity?.ownerOpenIds ?? [];
-      const adminOpenIds = identity?.adminOpenIds ?? [];
-      const isOwner = ownerOpenIds.includes(record.senderId);
-      const isAdmin = adminOpenIds.includes(record.senderId);
-      if (identity?.enabled && !isOwner && !isAdmin) {
+      if (!isOwnerOrAdmin(record.senderId, config.identity)) {
         logger.info(`save_sticker 被拒绝: senderId=${record.senderId} 不是 owner/admin`);
         return {
           saved: false,

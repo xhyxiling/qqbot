@@ -13,6 +13,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { ContentBlock } from '@deepseek-ai/dsh-llm';
 import type { ImQQBotConfig } from '../config.ts';
 import type { Logger } from '../types.ts';
+import { isOwnerOrAdmin } from '../identity/role.ts';
 import {
   resolveSessionRoute,
   type LlmRuntimeLike,
@@ -201,10 +202,7 @@ export function registerPersonaAnalysisTool(
       }
 
       // 权限门控：群友人格档案是敏感数据，owner/admin 才能查
-      const identity = config.identity;
-      const ownerOpenIds = identity?.ownerOpenIds ?? [];
-      const adminOpenIds = identity?.adminOpenIds ?? [];
-      if (identity?.enabled && !ownerOpenIds.includes(record.senderId) && !adminOpenIds.includes(record.senderId)) {
+      if (!isOwnerOrAdmin(record.senderId, config.identity)) {
         throw new Error(`${PERSONA_ANALYSIS_TOOL_NAME}: 这个功能只有主人或管理员才能用哦～`);
       }
 

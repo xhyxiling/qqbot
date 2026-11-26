@@ -5,6 +5,7 @@ import {
   buildRoleDeniedMessage,
   canUseCommand,
   hasIdentityConfig,
+  isOwnerOrAdmin,
   resolveSenderRole,
   ROLE_LABELS,
 } from './role.ts';
@@ -66,6 +67,32 @@ describe('resolveSenderRole', () => {
     expect(resolveSenderRole(undefined, config({ ownerOpenIds: [OWNER] }))).toBe('stranger');
     expect(resolveSenderRole('  ', config({ ownerOpenIds: [OWNER] }))).toBe('stranger');
     expect(resolveSenderRole(OWNER, undefined)).toBe('stranger');
+  });
+});
+
+describe('isOwnerOrAdmin', () => {
+  it('未配置 / 关闭识别时放行', () => {
+    expect(isOwnerOrAdmin(OWNER, undefined)).toBe(true);
+    expect(isOwnerOrAdmin(OWNER, config())).toBe(true);
+    expect(isOwnerOrAdmin('SOMEONE', config({ enabled: false, ownerOpenIds: [OWNER] }))).toBe(true);
+  });
+
+  it('只放行主人和管理员', () => {
+    const identity = config({
+      ownerOpenIds: [OWNER],
+      adminOpenIds: ['ADMIN1'],
+      friendOpenIds: ['FRIEND1'],
+    });
+    expect(isOwnerOrAdmin(OWNER, identity)).toBe(true);
+    expect(isOwnerOrAdmin('ADMIN1', identity)).toBe(true);
+    expect(isOwnerOrAdmin('FRIEND1', identity)).toBe(false);
+    expect(isOwnerOrAdmin('SOMEONE', identity)).toBe(false);
+    expect(isOwnerOrAdmin(undefined, identity)).toBe(false);
+  });
+
+  it('与身份标签一致：忽略空白与大小写', () => {
+    const identity = config({ ownerOpenIds: [` ${OWNER.toLowerCase()} `] });
+    expect(isOwnerOrAdmin(OWNER, identity)).toBe(true);
   });
 });
 

@@ -875,6 +875,10 @@ export class SessionManager {
     const existing = this.sessions.get(key);
 
     if (existing) {
+      // 群聊会话是群内多人共享的：senderId 必须跟随当前这条消息的发送者，
+      // 否则工具权限门控会一直拿着「会话创建者」的身份去判定后来的人
+      // （主人进群发言也会被判成陌生人）。
+      existing.senderId = senderId;
       existing.replyTarget = replyTarget;
       existing.lastActivity = Date.now();
       return existing;
