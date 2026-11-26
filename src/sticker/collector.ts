@@ -17,22 +17,39 @@ import type { StickerCollectorConfig } from './types.ts';
 import { StickerStore } from './storage.ts';
 import type { Sticker } from './types.ts';
 import { correctPathExt, correctBasenameExt, detectImageExt } from './signature.ts';
-import { describeImage, type DescribeImageServices } from '../media/describe-image.ts';
+import { describeImage, completeText, type DescribeImageServices } from '../media/describe-image.ts';
 import type { VisionConfig } from '../config.ts';
 
 /** 允许的扩展名（与 QQ 网关一致） */
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']);
 
-/** 给视觉模型的 prompt：生成一句话画面描述 + 几个关键词标签 */
-const STICKER_DESCRIBE_PROMPT =
-  '这是一张聊天表情包/贴图。请用一句话描述画面内容（主体 + 动作/表情，不超过 30 字），'
-  + '然后另起一行给出 3-6 个中文关键词标签（逗号分隔），标签要概括画面主体和情绪，适合做表情包检索。\n'
-  + '如果画面是知名 IP 角色（如奶龙、奶蛙、皮卡丘、蜡笔小新、LINE FRIENDS、小黄人、熊猫头、doge 等），'
-  + '必须在描述和标签里写出 IP 名；同系列角色要带上系列名（例如奶蛙 → 标签含「奶龙、奶蛙」），'
-  + '这样用户搜系列名时能命中。实在认不出时描述外形特征即可，不要硬编。\n'
-  + '格式示例：\n'
-  + '奶蛙瘫坐在地上吐舌头\n'
-  + '奶龙,奶蛙,瘫坐,吐舌头,摆烂';
+/** 第一阶段（视觉）：只做 OCR + 画面描述，不猜梗 */
+const STICKER_OCR_PROMPT =
+  '这是一张聊天表情包/贴图。请严格按下面两行格式输出，不要输出其他内容：\n'
+  + '画面：<一句话描述主体和动作/表情，不超过 30 字；如果是知名 IP 角色（奶龙、奶蛙、皮卡丘、'
+  + '蜡笔小新、LINE FRIENDS、小黄人、熊猫头、doge 等）要写出角色名>\n'
+  + '文字：<逐字转录图中所有可见文字，没有就写“无”>\n'
+  + '示例：\n'
+  + '画面：奶蛙瘫坐在雪地轮椅上张嘴吐舌\n'
+  + '文字：无';
+
+/** 第二阶段（文本）：结合 OCR 结果判断梗 + 生成最终描述和标签 */
+function buildMemeClassifyPrompt(visualDesc: string, ocrText: string, chatContext?: string): string {
+  return [
+    '你在帮 QQ 机器人整理表情包图库。下面是一张表情包的视觉识别结果：',
+    `画面：${visualDesc}`,
+    `图中文字：${ocrText || '无'}`,
+    chatContext ? `聊天语境（可能无关，仅供参考）：\n${chatContext.trim().slice(0, 300)}` : '',
+    '',
+    '请判断这是什么网络梗/表情包（能确定就写梗名，不确定就不要编造），然后严格输出两行：',
+    '第一行：一句话描述这张表情包表达的意思和适用场景（不超过 30 字，能确定梗名就把梗名写进去）',
+    '第二行：3-6 个中文标签（逗号分隔），包含梗名（如有）、画面主体、情绪、适用场景，适合检索',
+    '不能只重复画面描述，重点是「这个表情包用来表达什么」。',
+    '示例：',
+    '粉色小猪配文嘲讽对方像猪，怼人专用',
+    '你怎么跟猪一样,怼人,嘲讽,猪,表情包',
+  ].filter((l) => l !== '').join('\n');
+}
 
 export class StickerCollector {
   private readonly config: StickerCollectorConfig;
@@ -59,10 +76,11 @@ export class StickerCollector {
   }
 
   /**
-   * 调视觉模型给图片生成描述 + 标签。
-   * 失败（超时/无网/配置不全）时返回 undefined，调用方降级用原逻辑，不阻塞收藏。
+   * 两阶段识别表情包：视觉 OCR + 文本判梗。
+   * 阶段1 vision 只读图（OCR 文字 + 描述画面）；阶段2 文本模型判断梗并产出最终标签。
+   * 阶段2 失败时降级用阶段1 结果，不阻塞收藏。
    */
-  private async maybeDescribe(filePath: string): Promise<{ description: string; tags: string[] } | undefined> {
+  private async maybeDescribe(filePath: string, chatContext?: string): Promise<{ description: string; tags: string[] } | undefined> {
     if (!this.config.autoDescribe || !this.vision) return undefined;
     const { services, config: vision } = this.vision;
     if (!vision.enabled || !vision.provider || !vision.model) return undefined;
@@ -70,16 +88,53 @@ export class StickerCollector {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), vision.timeoutMs);
     try {
-      const text = await describeImage(services, vision, filePath, STICKER_DESCRIBE_PROMPT, controller.signal, 'sticker-describe');
-      const { description, tags } = this.parseDescribeOutput(text);
-      if (description) return { description, tags };
-      return undefined;
+      // ── 阶段 1：视觉 OCR + 画面描述 ──
+      const visual = await describeImage(services, vision, filePath, STICKER_OCR_PROMPT, controller.signal, 'sticker-ocr');
+      const { visualDesc, ocrText } = this.parseOcrOutput(visual);
+      if (!visualDesc) return undefined;
+
+      // ── 阶段 2：文本模型判梗 ──
+      try {
+        const meme = await completeText(
+          services,
+          { provider: vision.provider, model: vision.model, maxTokens: vision.maxTokens },
+          buildMemeClassifyPrompt(visualDesc, ocrText, chatContext),
+          controller.signal,
+          'sticker-meme',
+        );
+        const parsed = this.parseDescribeOutput(meme);
+        if (parsed.description) return parsed;
+      } catch (err) {
+        this.logger.debug(`sticker-collector: 梗判定失败，降级用画面描述: ${err instanceof Error ? err.message : String(err)}`);
+      }
+
+      // 降级：只有画面描述
+      return { description: visualDesc.slice(0, 60), tags: [] };
     } catch (err) {
-      this.logger.debug(`sticker-collector: 视觉描述失败 ${basename(filePath)}: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.debug(`sticker-collector: 视觉识别失败 ${basename(filePath)}: ${err instanceof Error ? err.message : String(err)}`);
       return undefined;
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /** 解析阶段1输出（画面 / 文字两行） */
+  private parseOcrOutput(text: string): { visualDesc: string; ocrText: string } {
+    let visualDesc = '';
+    let ocrText = '';
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line) continue;
+      const m = /^(画面|文字)\s*[:：]\s*(.*)$/.exec(line);
+      if (m) {
+        if (m[1] === '画面') visualDesc = m[2]!.trim();
+        else ocrText = m[2]!.trim();
+      } else if (!visualDesc) {
+        visualDesc = line; // 模型没按格式输出时兜底
+      }
+    }
+    if (ocrText === '无') ocrText = '';
+    return { visualDesc: visualDesc.slice(0, 60), ocrText: ocrText.slice(0, 100) };
   }
 
   /** 解析视觉模型输出：第一行描述，第二行标签 */
@@ -173,6 +228,7 @@ export class StickerCollector {
     filePath: string,
     source?: { groupId?: string; senderId?: string },
     context?: string,
+    chatContext?: string,
   ): Promise<Sticker | null> {
     if (!this.config.enabled) return null;
     let buf: Buffer;
@@ -205,7 +261,7 @@ export class StickerCollector {
 
     // 已存在的图不重复调 vision（省钱）
     const alreadyExists = await this.store.alreadyHas(correctedPath);
-    const described = !alreadyExists ? await this.maybeDescribe(correctedPath) : undefined;
+    const described = !alreadyExists ? await this.maybeDescribe(correctedPath, chatContext) : undefined;
     const tags = this.mergeTags(described?.tags, context, correctedPath);
 
     const added = await this.store.tryAdd({
@@ -242,6 +298,7 @@ export class StickerCollector {
     groupOpenid: string | undefined,
     senderOpenid: string,
     context?: string,
+    chatContext?: string,
   ): Promise<Sticker[]> {
     if (!this.config.enabled) return [];
     if (!attachments || !downloadedFiles || downloadedFiles.length === 0) return [];
@@ -299,7 +356,7 @@ export class StickerCollector {
       const mimeType = mimeMap[ext] ?? 'image/png';
 
       const alreadyExists = await this.store.alreadyHas(dl.localPath);
-      const described = !alreadyExists ? await this.maybeDescribe(dl.localPath) : undefined;
+      const described = !alreadyExists ? await this.maybeDescribe(dl.localPath, chatContext) : undefined;
       const finalTags = this.mergeTags(described?.tags, context, att.filename);
 
       const added = await this.store.tryAdd({

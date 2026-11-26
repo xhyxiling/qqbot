@@ -73,7 +73,7 @@ export class StickerEngine {
       this.collector.importOrphans(50)
         .then((n) => {
           if (n > 0) this.logger.info(`sticker-engine: 启动时补录 ${n} 张孤儿表情`);
-          return this.vision ? this.collector.backfillMissingDescriptions(30) : 0;
+          return this.vision ? this.collector.backfillMissingDescriptions(50) : 0;
         })
         .catch((err) => {
           this.logger.warn(`sticker-engine: 启动补录/补描述失败: ${err instanceof Error ? err.message : String(err)}`);
@@ -157,4 +157,30 @@ export function getLatestSessionAttachment(sessionKey: string): { localPath: str
   // 按时间倒序，最新的在最前
   list.sort((a, b) => b.timestamp - a.timestamp);
   return { localPath: list[0]!.localPath, filename: list[0]!.filename };
+}
+
+// ── 会话最近聊天文本 ──
+// 自动收藏表情时把最近几条群聊文字当识别参考（语境），不直接变成标签。
+const _sessionRecentText = new Map<string, Array<{ name: string; text: string; at: number }>>();
+const MAX_RECENT_TEXT = 6;
+const RECENT_TEXT_TTL_MS = 10 * 60 * 1000;
+
+/** 记录一条聊天文本（只存非空、非图片的文本消息） */
+export function rememberSessionText(sessionKey: string, senderName: string | undefined, text: string | undefined): void {
+  const t = text?.trim();
+  if (!t) return;
+  const now = Date.now();
+  const list = (_sessionRecentText.get(sessionKey) ?? []).filter((i) => now - i.at < RECENT_TEXT_TTL_MS);
+  list.push({ name: (senderName ?? '').slice(0, 20), text: t.slice(0, 100), at: now });
+  _sessionRecentText.set(sessionKey, list.slice(-MAX_RECENT_TEXT));
+}
+
+/** 取最近几条聊天文本，拼成「昵称: 内容」的多行字符串 */
+export function getRecentSessionText(sessionKey: string, limit = 4): string | undefined {
+  const list = _sessionRecentText.get(sessionKey);
+  if (!list || list.length === 0) return undefined;
+  const now = Date.now();
+  const recent = list.filter((i) => now - i.at < RECENT_TEXT_TTL_MS).slice(-limit);
+  if (recent.length === 0) return undefined;
+  return recent.map((i) => `${i.name}: ${i.text}`).join('\n');
 }

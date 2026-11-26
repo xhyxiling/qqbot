@@ -22,7 +22,7 @@ import {
 import { clearGroupHistory } from '../features/history-store.ts';
 import { buildIdentityPrefix } from '../identity/role.ts';
 import type { MiddlewareContext } from '@tencent-connect/qqbot-nodejs';
-import { getActiveStickerEngine, cacheSessionAttachments } from '../sticker/index.ts';
+import { getActiveStickerEngine, cacheSessionAttachments, rememberSessionText, getRecentSessionText } from '../sticker/index.ts';
 
 // ── 类型定义 ──
 
@@ -107,12 +107,15 @@ export async function handleInbound(
   };
 
   // ── 自动收藏群里的图片（异步旁路，不阻塞消息处理） ──
+  const stickerSessionKey = `qqbot:${config.appId}:${scope}:${peerId}`;
+  // 记住最近几条聊天文字，收藏表情时作为识别语境（图片消息自身通常没有文字）
+  rememberSessionText(stickerSessionKey, msg.senderName, msg.content);
+
   const stickerEngine = getActiveStickerEngine();
   if (stickerEngine && mwState.downloadedFiles && mwState.downloadedFiles.length > 0) {
     // 旁路缓存下载的图片路径（手动收藏工具需要）
-    const sessionKey = `qqbot:${config.appId}:${scope}:${peerId}`;
     cacheSessionAttachments(
-      sessionKey,
+      stickerSessionKey,
       mwState.downloadedFiles.map((d) => ({ localPath: d.localPath, filename: d.filename, size: 0 })),
     );
 
@@ -122,6 +125,7 @@ export async function handleInbound(
       scope === 'group' ? (msg.groupOpenid ?? undefined) : undefined,
       msg.senderId,
       msg.content?.trim() || undefined,
+      getRecentSessionText(stickerSessionKey),
     ).catch(() => { /* 收藏失败不影响主流程 */ });
   }
 

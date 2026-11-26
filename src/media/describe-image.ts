@@ -78,3 +78,33 @@ export async function describeImage(
 
   return collectStreamText(services.llm.stream(options), label);
 }
+
+/**
+ * 纯文本补全（不带图）。
+ *
+ * 用于表情包识别的第二阶段：视觉模型先 OCR + 描述画面，再把文字交给文本模型
+ * 判断「这是什么梗」——文本模型的中文网络梗知识远强于视觉描述。
+ */
+export async function completeText(
+  services: DescribeImageServices,
+  opts: { provider: string; model: string; maxTokens: number },
+  prompt: string,
+  signal: AbortSignal,
+  label = 'complete-text',
+): Promise<string> {
+  const source = { kind: 'plugin:dsh-im-qqbot' } as unknown as { kind: 'plugin'; plugin: string };
+  const message = createUserMessage({
+    content: [{ type: 'text', text: prompt }],
+    source,
+  });
+
+  const options: GenerateOptions = {
+    provider: opts.provider,
+    model: opts.model,
+    messages: [message],
+    maxTokens: opts.maxTokens,
+    signal,
+  };
+
+  return collectStreamText(services.llm.stream(options), label);
+}
