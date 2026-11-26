@@ -409,7 +409,8 @@ export function registerSendStickerTool(
     description:
       '从表情包收藏库挑选并直接发送一个应景的表情到当前 QQ 会话。'
       + '等于 qqbot_pick_sticker + qqbot_send_file 的组合，一次调用完成。'
-      + '⚠️ 只有主人（owner）或管理员（admin）能调用，普通成员会被拒绝。',
+      + '聊天中对方在开玩笑、吐槽、撒娇，或情绪很足时，可以主动调用，不需要对方要求。'
+      + '内部会校验身份，非主人/管理员会被拒绝。',
     parameters: {
       type: 'object',
       properties: {

@@ -48,15 +48,44 @@ export function buildStickerPromptSection(options: StickerPromptOptions): Sticke
   const describedCount = catalog.filter((c) => c.description || c.tags.length > 0).length;
 
   const lines: string[] = [
-    `【表情包】图库里现有 ${options.total} 个表情。要发的时候直接调用 ${SEND_STICKER_TOOL_NAME}，一次调用就完成挑选和发送。`,
+    `【表情包】图库里有 ${options.total} 个表情。聊天时你本来就习惯用表情接梗——` +
+      `看到合适的就顺手发一张，不用等对方开口，也不用提前说"我给你发个表情"。` +
+      `要发就直接调用 ${SEND_STICKER_TOOL_NAME}，一次调用就完成挑图和发送。`,
     '',
+    '发之前扫一眼这段话，命中任意一条就发：',
+    '- 对方话里出现这些词：笑死、哈哈、离谱、无语、绝了、救命、服了、牛、好家伙、就这、真的假的、666、绷不住、破防、太真实、典、确实、阴阳、早上好、晚安、在吗',
+    '- 对方在开玩笑、吐槽、撒娇、炫耀、犯蠢、自嘲、阴阳怪气',
+    '- 对方在调侃你、损你、开你玩笑（「你怎么和小猪一样」「你是不是傻」「就这？」「菜」）——'
+      + '用表情包回击比纯文字有梗：直接回一张对应的图，再跟一句你人格口吻的短句。'
+      + '库里若有和对方原话同款的梗图（比如对方说「你怎么跟猪一样」，库里有「你怎么跟猪一样」那张），优先 sticker_no 发那张。',
+    '- 你自己在调侃、卖萌、装可怜、被噎住、想收尾话题',
+    '',
+    '这些情况不发：',
+    '- 正经提问、解题、写代码、技术或工作讨论',
+    '- 对方在难过、生气、求助，需要用心的文字回应',
+    '- 刚发过表情（两轮内），或同一话题已经发过',
+    '',
+    '频率：轻松闲聊里大约每 3-5 轮配一张；别每句都发，一轮最多一张。',
+    '表情只是补充：发完表情，你该说的文字照常说完。',
+    '',
+    '怎么挑：下面的清单里一眼能看出最贴切的那张，就直接传 sticker_no=编号，最准；'
+      + '被对方调侃/怼的时候，优先挑和对方原话同一个梗的图。'
+      + '拿不准就用 topic（写能命中描述/标签的具体关键词，如「猫」「翻白眼」「比心」「猪」）'
+      + '+ mood（happy / sad / angry / silly / serious / neutral，按真实氛围，不要一律 happy）。'
+      + '清单里没有贴合的就别硬发；挑不到或发送失败就当没这回事，不要解释工具和失败原因。',
+    '',
+    '权限：主人（[身份: 主人]）或管理员（[身份: 管理员]）可以让你发；其他人提这个要求就按人格口吻推掉，不要调用工具。',
+    '',
+    '修正元数据：如果主人/管理员指出某张表情的描述或标签识别错了（比如「这几张其实是奶龙」），'
+      + '用 qqbot_list_stickers 确认编号后调用 qqbot_update_sticker 改 description / tags，改完简短确认即可。',
   ];
 
+  // 清单放最后：指令优先，避免长清单把行为要求淹没
   if (catalog.length > 0) {
-    lines.push(`库里的表情（编号可用 sticker_no 直接指定发送）：`);
+    lines.push('', '库里的表情（#编号 可直接用 sticker_no 指定发送）：');
     for (const item of catalog) {
       const desc = item.description?.trim();
-      const tagStr = item.tags.length > 0 ? item.tags.join('、') : '';
+      const tagStr = item.tags.slice(0, 5).join('、');
       if (desc && tagStr) {
         lines.push(`- #${item.no} ${desc}（${tagStr}）`);
       } else if (desc) {
@@ -68,31 +97,9 @@ export function buildStickerPromptSection(options: StickerPromptOptions): Sticke
     if (options.total > catalog.length) {
       lines.push(`…还有 ${options.total - catalog.length} 张未列出，可调用 qqbot_list_stickers 查看完整清单。`);
     } else if (describedCount === 0) {
-      lines.push('（目前这些表情还没有画面描述，可以先把大致内容告诉主人，或用 qqbot_list_stickers 看看。）');
+      lines.push('（这些表情还没有画面描述，可以用 qqbot_list_stickers 看看。）');
     }
-    lines.push('');
   }
-
-  lines.push(
-    '什么时候发：',
-    '- 该发：对方在开玩笑、吐槽、撒娇，或者情绪很足（得意、无语、委屈、被逗笑），一句短回复配一张表情比纯文字更自然。',
-    '- 不该发：正经提问、解题、技术或工作讨论、对方在难过/生气需要认真回应的时候；这些场合发表情会显得敷衍。',
-    '- 拿不准就不发。宁可少发，也不要在每条回复后面都塞一张。',
-    '',
-    '剂量：',
-    '- 一次回复最多 1 个表情；同一话题不要连着发。',
-    '- 刚刚发过表情的两轮内不再发。',
-    '- 表情不能代替文字：该说的话还是要说，表情只是补充。',
-    '',
-    '怎么选：上面的清单里每张图都有 #编号，能一眼看出哪张最贴合当前话题时，直接调用 qqbot_send_sticker 并传 sticker_no=编号，最准。'
-    + '没把握时再退回用 topic（写能命中某张图描述/标签的具体关键词，如「猫」「翻白眼」「比心」）+ mood（按真实氛围选 happy / sad / angry / silly / serious / neutral，不要一律填 happy）自动挑。'
-    + '清单里没有贴合当前话题的图时，就不要硬发。',
-    '没挑到合适的、或者发送失败时，不要解释工具和失败原因，用自己的人格口吻一句带过，或者干脆不发。',
-    '',
-    '权限：只有 [身份: 主人] 或 [身份: 管理员] 能让你发表情。其他人提这个要求时按人格口吻推掉，不要调用工具。',
-    '修正元数据：如果主人/管理员指出某张表情的描述或标签识别错了（比如「这几张其实是奶龙」），'
-    + '用 qqbot_list_stickers 确认编号后调用 qqbot_update_sticker 改 description / tags，改完简短确认即可。',
-  );
 
   return {
     name: 'qqbot:sticker',
