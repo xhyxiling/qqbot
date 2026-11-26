@@ -264,6 +264,16 @@ function useConfigPanelStyles(): void {
 }
 .imqb2-input:focus { outline: none; border-color: var(--dsw-alias-state-business-primary); }
 .imqb2-input:disabled { color: var(--dsw-alias-label-tertiary); cursor: default; }
+/* 路径输入 + 原生选择按钮 */
+.imqb2-input-row { display: flex; gap: 8px; align-items: center; }
+.imqb2-input-row > *:first-child { flex: 1; min-width: 0; }
+.imqb2-pick-btn {
+  flex: none; height: 34px; padding: 0 12px; white-space: nowrap;
+  border: 0.5px solid var(--dsw-alias-border-l4); border-radius: var(--dsw-radius-md, 8px);
+  background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-primary);
+  font: inherit; font-size: 13px; cursor: pointer;
+}
+.imqb2-pick-btn:hover { background: var(--dsw-alias-bg-layer-2); }
 .imqb2-textarea { height: auto; min-height: 68px; padding: 8px 12px; resize: vertical; line-height: 1.5; }
 /* 工具下拉（原生 select + 已选 chip） */
 .imqb2-select { padding: 0 8px; cursor: pointer; }
@@ -497,19 +507,104 @@ function SwitchRow({ label, help, checked, onChange }: {
 }
 
 /** 文本行（label 上 + 输入下，与官方 fields 布局一致） */
-function FieldRow({ label, help, value, placeholder, type, onChange }: {
+/** DSH Desktop 是否提供 File → 绝对路径 的 bridge（浏览器里没有） */
+function hasNativePathBridge(): boolean {
+  const host = (window as unknown as { __DSH_HOST_PATHS__?: { pathFor?: unknown } }).__DSH_HOST_PATHS__;
+  return typeof host?.pathFor === 'function';
+}
+
+/** File → 绝对路径：优先 DSH bridge，回退旧版 Electron 的 file.path */
+function resolvePickedPath(file: File): string | undefined {
+  const host = (window as unknown as { __DSH_HOST_PATHS__?: { pathFor?: (f: File) => string } }).__DSH_HOST_PATHS__;
+  const viaBridge = host?.pathFor?.(file);
+  if (typeof viaBridge === 'string' && viaBridge.length > 0) return viaBridge;
+  const legacy = (file as File & { path?: string }).path;
+  return legacy && legacy.length > 0 ? legacy : undefined;
+}
+
+/**
+ * 打开系统选择框（目录 / 文件），返回绝对路径。
+ *
+ * 目录模式用 webkitdirectory 枚举目录下的文件，再取第一个文件的父目录；
+ * 空目录无法得到路径，此时返回 undefined，由调用方提示手动填写。
+ */
+function openPathPicker(mode: 'dir' | 'file'): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    const el = document.createElement('input');
+    el.type = 'file';
+    if (mode === 'dir') {
+      el.setAttribute('webkitdirectory', '');
+      el.setAttribute('directory', '');
+    }
+    el.style.display = 'none';
+
+    let settled = false;
+    const finish = (value?: string): void => {
+      if (settled) return;
+      settled = true;
+      el.remove();
+      resolve(value);
+    };
+
+    el.addEventListener('change', () => {
+      const file = el.files?.[0];
+      if (!file) { finish(); return; }
+      const abs = resolvePickedPath(file);
+      // 目录模式取父目录（去掉最后一段文件名）
+      finish(mode === 'dir' && abs ? abs.replace(/[\\/][^\\/]*$/, '') : abs);
+    });
+
+    // 用户取消时 change 不触发：窗口重新获得焦点后若仍无文件，判定为取消
+    window.addEventListener('focus', () => {
+      setTimeout(() => {
+        if (!el.files || el.files.length === 0) finish();
+      }, 600);
+    }, { once: true });
+
+    document.body.appendChild(el);
+    el.click();
+  });
+}
+
+function FieldRow({ label, help, value, placeholder, type, pick, onChange }: {
   label: string; help?: string; value: string; placeholder?: string;
   /** input 类型（如 password）；缺省 text */
   type?: 'text' | 'password';
+  /** 显示原生选择按钮：dir = 选文件夹，file = 选文件 */
+  pick?: 'dir' | 'file';
   onChange: (next: string) => void;
 }): ReactNode {
+  const handlePick = useCallback(async (): Promise<void> => {
+    if (!hasNativePathBridge()) {
+      window.alert('选择路径需要在 DSH 桌面客户端里操作；浏览器里请手动填写完整路径。');
+      return;
+    }
+    const picked = await openPathPicker(pick ?? 'file');
+    if (picked === undefined) return;
+    if (picked.length === 0) {
+      window.alert('没能读取到文件夹路径（空文件夹无法获取）。请直接手动填写，或选一个里面有文件的目录。');
+      return;
+    }
+    onChange(picked);
+  }, [pick, onChange]);
+
+  const inputEl = createElement('input', {
+    className: 'imqb2-input', value, placeholder, spellCheck: false,
+    type: type ?? 'text', autoComplete: 'off',
+    onChange: (event: ChangeEvent<HTMLInputElement>) => { onChange(event.currentTarget.value); },
+  });
+
   return createElement('div', { className: 'imqb2-field' },
     createElement('span', { className: 'imqb2-label' }, label),
-    createElement('input', {
-      className: 'imqb2-input', value, placeholder, spellCheck: false,
-      type: type ?? 'text', autoComplete: 'off',
-      onChange: (event: ChangeEvent<HTMLInputElement>) => { onChange(event.currentTarget.value); },
-    }),
+    pick === undefined
+      ? inputEl
+      : createElement('div', { className: 'imqb2-input-row' },
+        createElement('div', { style: { flex: 1, minWidth: 0 } }, inputEl),
+        createElement('button', {
+          type: 'button', className: 'imqb2-pick-btn',
+          onClick: () => { void handlePick(); },
+        }, pick === 'dir' ? '选择文件夹…' : '选择文件…'),
+      ),
     help === undefined ? null : createElement('p', { className: 'imqb2-hint' }, help),
   );
 }
@@ -2031,6 +2126,7 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
       value: stickerStorage.imagesDir ?? '',
       placeholder: '留空 = 复用 ~/.dsh-qqbot/media（媒体 TTL 清理会删）',
       help: '填了之后收藏的图会被 copyFile 到这个目录，不再受 media cleaner 影响。用绝对路径最稳。',
+      pick: 'dir',
       onChange: (v) => {
         patch('sticker', {
           ...sticker,
@@ -2043,6 +2139,7 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
       value: stickerStorage.metadataPath ?? '',
       placeholder: '留空 = ~/.dsh-qqbot/stickers.json',
       help: '只存元数据（id/热度/标签等），不存图片本体。一般不需要改。',
+      pick: 'file',
       onChange: (v) => {
         patch('sticker', {
           ...sticker,
