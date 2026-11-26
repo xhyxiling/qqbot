@@ -160,7 +160,10 @@ export async function bootstrapGateway(
   // 媒体发送不走 resolveReplyTarget：群聊带 msgId 会触发"回复那条消息"语义，自动 @ 原发言者。
   // 这里直接 scope + targetId 发到当前会话即可。
   const mediaSender: MediaSenderLike = {
-    sendImage: (target, source) => bot.sendImage(mediaScopeOnly(target), source),
+    // opts.reply=true 时保留 msgId，走被动回复（不需要「主动发消息」权限）；
+    // SDK 的媒体消息只带 msg_id、不带 message_reference，因此不会引用原消息或额外 @ 人。
+    sendImage: (target, source, opts) =>
+      bot.sendImage(opts?.reply === true ? target : mediaScopeOnly(target), source),
     sendVideo: (target, source) => bot.sendVideo(mediaScopeOnly(target), source),
     sendVoice: (target, source) => bot.sendVoice(mediaScopeOnly(target), source),
     sendFile: (target, source, opts) => bot.sendFile(mediaScopeOnly(target), source, opts),

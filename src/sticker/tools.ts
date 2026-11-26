@@ -495,7 +495,7 @@ export function registerSendStickerTool(
         return { sent: false, reason: `文件已不存在: ${sticker.filePath}` };
       }
 
-      const result = await sendMediaFile(mediaSender, replyTarget, sticker.filePath);
+      const result = await sendMediaFile(mediaSender, replyTarget, sticker.filePath, { asReply: true });
       if (result.outcome === 'missing') {
         return { sent: false, reason: `文件不存在或不可读: ${sticker.filePath}` };
       }

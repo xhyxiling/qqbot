@@ -17,7 +17,11 @@ export interface MediaSendResult {
 }
 
 export interface MediaSenderLike {
-  sendImage(target: ReplyTarget, source: { localPath?: string }): Promise<MediaSendResult>;
+  sendImage(
+    target: ReplyTarget,
+    source: { localPath?: string },
+    opts?: { reply?: boolean },
+  ): Promise<MediaSendResult>;
   sendVideo(target: ReplyTarget, source: { localPath?: string }): Promise<MediaSendResult>;
   sendVoice(target: ReplyTarget, source: { localPath?: string }): Promise<MediaSendResult>;
   sendFile(target: ReplyTarget, source: { localPath?: string }, opts?: { fileName?: string }): Promise<MediaSendResult>;
@@ -56,7 +60,7 @@ export async function sendMediaFile(
   bot: MediaSenderLike,
   target: ReplyTarget,
   filePath: string,
-  opts: { fileName?: string } = {},
+  opts: { fileName?: string; asReply?: boolean } = {},
 ): Promise<SendMediaResult> {
   let size: number;
   try {
@@ -73,7 +77,7 @@ export async function sendMediaFile(
 
   try {
     const result = ext === '.gif' || IMAGE_EXTS.has(ext)
-      ? await bot.sendImage(target, source)
+      ? await bot.sendImage(target, source, opts.asReply === true ? { reply: true } : undefined)
       : VIDEO_EXTS.has(ext)
         ? await bot.sendVideo(target, source)
         : VOICE_EXTS.has(ext)
