@@ -196,7 +196,7 @@ export async function bootstrapGateway(
 
     // 注册工具（模型可调用 qqbot_pick_sticker / qqbot_save_sticker / qqbot_send_sticker）
     registerStickerTools(ctx, stickerEngine, manager, config, logger);
-    registerSendStickerTool(ctx, stickerEngine, mediaSender, manager, config, logger);
+    registerSendStickerTool(ctx, stickerEngine, mediaSender, manager, logger);
     registerSaveStickerTool(ctx, stickerEngine, manager, config, logger);
     registerListStickerTool(ctx, stickerEngine, manager, config, logger);
     registerUpdateStickerTool(ctx, stickerEngine, manager, config, logger);

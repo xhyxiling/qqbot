@@ -398,7 +398,6 @@ export function registerSendStickerTool(
   engine: StickerEngine,
   mediaSender: MediaSenderLike,
   manager: SessionManagerLike,
-  config: ImQQBotConfig,
   logger: Logger,
 ): void {
   const tools = ctx.get('tools') as ToolsRegistryLike | undefined;
@@ -409,8 +408,7 @@ export function registerSendStickerTool(
     description:
       '从表情包收藏库挑选并直接发送一个应景的表情到当前 QQ 会话。'
       + '等于 qqbot_pick_sticker + qqbot_send_file 的组合，一次调用完成。'
-      + '聊天中对方在开玩笑、吐槽、撒娇，或情绪很足时，可以主动调用，不需要对方要求。'
-      + '内部会校验身份，非主人/管理员会被拒绝。',
+      + '聊天中对方在开玩笑、吐槽、撒娇，或情绪很足时，可以主动调用，不需要对方要求。',
     parameters: {
       type: 'object',
       properties: {
@@ -460,15 +458,6 @@ export function registerSendStickerTool(
         return { sent: false, reason: '只能在 QQ 会话里使用这个工具' };
       }
 
-      // 权限门控：只有主人/admin 能让 bot 主动发表情
-      const identity = config.identity;
-      const ownerOpenIds = identity?.ownerOpenIds ?? [];
-      const adminOpenIds = identity?.adminOpenIds ?? [];
-      if (identity?.enabled && !ownerOpenIds.includes(record.senderId) && !adminOpenIds.includes(record.senderId)) {
-        logger.info(`send_sticker 被拒绝: senderId=${record.senderId} 不是 owner/admin`);
-        return { sent: false, reason: '只有主人或管理员才能让我发表情哦～' };
-      }
-
       const replyTarget = record.replyTarget;
       const a = args as { sticker_no?: number; topic?: string; mood?: string };
 
@@ -495,7 +484,12 @@ export function registerSendStickerTool(
         return { sent: false, reason: `文件已不存在: ${sticker.filePath}` };
       }
 
-      const result = await sendMediaFile(mediaSender, replyTarget, sticker.filePath, { asReply: true });
+      // 先试主动消息（不带 msg_id，群里不会 @ 人）；没有主动权限时降级为被动回复（会 @ 触发者）
+      let result = await sendMediaFile(mediaSender, replyTarget, sticker.filePath);
+      if (result.outcome === 'failed') {
+        const fallback = await sendMediaFile(mediaSender, replyTarget, sticker.filePath, { asReply: true });
+        if (fallback.outcome !== 'missing') result = fallback;
+      }
       if (result.outcome === 'missing') {
         return { sent: false, reason: `文件不存在或不可读: ${sticker.filePath}` };
       }
