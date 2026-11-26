@@ -39,6 +39,9 @@ export const TOOL_CATALOG: ReadonlyArray<ToolCatalogEntry> = [
   { name: 'qqbot_update_sticker', label: '修正表情的描述/标签（仅主人/管理员）', group: GROUP_PLUGIN },
 ];
 
+/** 管理工具：主人用自然语言改设置（人格/记忆/会话），始终放行，不受人格白名单限制 */
+export const CONTROL_TOOL_NAME = 'qqbot_control';
+
 /** sticker 工具：消息投递能力，和 qqbot_voice 一样始终放行（不受 persona 工具白名单限制） */
 export const STICKER_TOOL_NAMES: readonly string[] = [
   'qqbot_pick_sticker',
@@ -60,6 +63,7 @@ export const STICKER_TOOL_NAMES: readonly string[] = [
  */
 export const DEFAULT_TOOL_ALLOWLIST: readonly string[] = [
   ...TOOL_CATALOG.map((entry) => entry.name),
+  CONTROL_TOOL_NAME,
   'ask_user_question',
   'web_search',
   'web_fetch',

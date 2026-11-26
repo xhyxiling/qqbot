@@ -62,7 +62,7 @@ describe('MemoryStore', () => {
     const store = makeStore();
     store.recordInteraction(KEY, 'group', 'GROUP1');
     const data = JSON.parse(readFileSync(path, 'utf8')) as { version: number; chats: Record<string, unknown> };
-    expect(data.version).toBe(1);
+    expect(data.version).toBe(2);
     expect(Object.keys(data.chats)).toEqual([KEY]);
   });
 

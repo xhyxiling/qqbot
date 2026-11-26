@@ -28,6 +28,46 @@ export const BIND_UPDATE_PATH = '/qqbot/im-qqbot/update';
 /** 群友人格档案列表（设置面板「群友人格」页签） */
 export const BIND_PERSONAS_PATH = '/qqbot/im-qqbot/personas';
 
+/** NapCat（OneBot 11 实现）托管：状态查询 + 安装/启动/停止/刷新 */
+export const BIND_NAPCAT_PATH = '/qqbot/im-qqbot/napcat';
+
+/** NapCat 托管阶段（与 onebot/napcat.ts 的 NapcatPhase 同字面量） */
+export type NapcatPhaseWire =
+  | 'unsupported'
+  | 'not_installed'
+  | 'installing'
+  | 'installed'
+  | 'starting'
+  | 'running'
+  | 'login_required'
+  | 'error';
+
+/** NapCat 托管状态（HTTP 序列化形态） */
+export interface NapcatStateWire {
+  phase: NapcatPhaseWire;
+  platform: string;
+  installDir: string;
+  qqPath?: string;
+  launcher?: string;
+  webuiUrl: string;
+  httpUrl: string;
+  loggedIn: boolean;
+  uin?: string;
+  progress?: number;
+  message?: string;
+}
+
+/** 面板可触发的托管动作 */
+export type NapcatAction = 'install' | 'start' | 'stop' | 'refresh';
+
+/** 托管动作的统一响应 */
+export interface NapcatActionResponse {
+  ok: boolean;
+  state: NapcatStateWire;
+  message?: string;
+  error?: string;
+}
+
 /** 线上协议（HTTP 路由序列化形态） */
 export type BindStateWire =
   | { phase: 'starting' }

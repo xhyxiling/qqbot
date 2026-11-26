@@ -24,6 +24,8 @@ interface SessionManagerLike {
     scope: 'c2c' | 'group';
     peerId: string;
     replyTarget: ReplyTarget;
+    /** 本轮已发表情的描述片段（出站过滤「解说表情」用，见 SessionRecord.stickerDescTokens） */
+    stickerDescTokens?: string[];
   } | undefined;
 }
 
@@ -383,6 +385,25 @@ export function registerUpdateStickerTool(
  * 模型只需调用一次：同时挑表情 + 发送到当前会话。
  * 通过 exec.agent 反查当前会话，与 qqbot_send_file 共用发送逻辑。
  */
+/**
+ * 表情描述/标签 → 出站过滤用的片段集合。
+ *
+ * 标签整体参与匹配；描述去掉标点后取 3~4 字滑窗，能覆盖「戴花帽子这只」这类改写。
+ * 只在刚发过表情的那一轮用于剔除解说分句，不影响正常聊天内容。
+ */
+export function buildStickerDescTokens(sticker: Pick<Sticker, 'description' | 'tags'>): string[] {
+  const tokens = new Set<string>();
+  for (const tag of sticker.tags) {
+    const t = tag.trim();
+    if (t.length >= 2) tokens.add(t);
+  }
+  const desc = (sticker.description ?? '').replace(/[\s，。！？；：、,.!?;:（）()「」《》\-—…~]+/g, '');
+  for (let len = 3; len <= 4; len += 1) {
+    for (let i = 0; i + len <= desc.length; i += 1) tokens.add(desc.slice(i, i + len));
+  }
+  return [...tokens];
+}
+
 export function registerSendStickerTool(
   ctx: Context,
   engine: StickerEngine,
@@ -399,7 +420,7 @@ export function registerSendStickerTool(
       '从表情包收藏库挑选并直接发送一个应景的表情到当前 QQ 会话。'
       + '等于 qqbot_pick_sticker + qqbot_send_file 的组合，一次调用完成。'
       + '聊天中对方在开玩笑、吐槽、撒娇，或情绪很足时，可以主动调用，不需要对方要求。'
-      + '对方明确要表情时，调用本工具后回复正文留空，不要再补文字。',
+      + '对方明确要表情时，调用本工具后直接结束这一轮，不要再输出文字。',
     parameters: {
       type: 'object',
       properties: {
@@ -489,6 +510,11 @@ export function registerSendStickerTool(
       }
 
       logger.info(`im-qqbot: qqbot_send_sticker 发送 ${sticker.filename} (${result.size} bytes) → ${replyTarget.scope}:${replyTarget.targetId}`);
+      // 记下这张表情的描述片段：出站会据此丢掉模型对表情的主动解说
+      record.stickerDescTokens = [
+        ...(record.stickerDescTokens ?? []),
+        ...buildStickerDescTokens(sticker),
+      ];
       return {
         sent: true,
         filename: sticker.filename,

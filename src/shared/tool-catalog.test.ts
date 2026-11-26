@@ -15,7 +15,7 @@ import {
 } from './tool-catalog.ts';
 
 describe('TOOL_CATALOG', () => {
-  it('只包含 QQ 插件内置的 8 个工具', () => {
+  it('只包含 QQ 插件内置的工具', () => {
     expect(catalogToolNames()).toEqual([
       'qqbot_solve',
       'qqbot_describe_image',
@@ -25,6 +25,11 @@ describe('TOOL_CATALOG', () => {
       'qqbot_explain',
       'qqbot_rewrite',
       'qqbot_analyze_persona',
+      'qqbot_pick_sticker',
+      'qqbot_save_sticker',
+      'qqbot_send_sticker',
+      'qqbot_list_stickers',
+      'qqbot_update_sticker',
     ]);
   });
 
@@ -53,9 +58,10 @@ describe('DEFAULT_TOOL_ALLOWLIST', () => {
     expect(DEFAULT_TOOL_ALLOWLIST.slice(0, pluginNames.length)).toEqual(pluginNames);
   });
 
-  it('额外只放行只读的联网与提问能力', () => {
+  it('额外放行管理入口与只读的联网/提问能力', () => {
     expect(DEFAULT_TOOL_ALLOWLIST).toEqual([
       ...catalogToolNames(),
+      'qqbot_control',
       'ask_user_question',
       'web_search',
       'web_fetch',

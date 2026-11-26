@@ -140,11 +140,28 @@ export interface SessionRecord {
    * 本轮单轮情感指令（`qqbot_voice({ instruction })` 传入），覆盖人格/全局设置。
    */
   voiceInstruction?: string;
+  /**
+   * 本轮已经发出去的表情的描述/标签片段（`qqbot_send_sticker` 成功后写入）。
+   *
+   * 出站用它过滤模型「主动解说表情」的分句（如「戴花帽子这只，呆呆的」），
+   * 其余文字照常发送。每条入站消息都会清空。
+   */
+  stickerDescTokens?: string[];
   /** 当前人格工具限制状态（personaId=null 表示关闭人格/未配置） */
   toolRestriction?: {
     personaId: string | null;
     /** restrict 的释放函数；无限制时为 undefined */
     dispose?: () => void;
+  };
+  /**
+   * 模型通过 qqbot_control 请求、需要等本轮结束才执行的会话操作。
+   *
+   * new/compact 在 agent 运行期间执行会打断当前轮，因此先打标记，
+   * 由出站侧在 turn/end 之后执行并清理。
+   */
+  pendingControl?: {
+    action: 'new' | 'compact';
+    at: number;
   };
 }
 

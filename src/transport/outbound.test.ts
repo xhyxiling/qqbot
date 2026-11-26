@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createOutboundHandler } from './outbound.ts';
+import { createOutboundHandler, stripStickerDescriptions } from './outbound.ts';
 import type { QQBotSender, StreamSessionLike } from './outbound-buffer.ts';
 import type { SessionManager, SessionRecord } from '../session/index.ts';
 import type { ImQQBotConfig } from '../config.ts';
@@ -547,5 +547,21 @@ describe('OutboundRouter: 语音回复（模型决定）', () => {
     await Promise.resolve();
 
     expect(speak).not.toHaveBeenCalled();
+  });
+});
+
+describe('stripStickerDescriptions — 纯括号状态语', () => {
+  it('整条回复只是「（发过去了）」时丢弃', () => {
+    expect(stripStickerDescriptions('（发过去了）', ['呆滞傻笑'])).toBe('');
+    expect(stripStickerDescriptions('(发过去了)', undefined)).toBe('');
+    expect(stripStickerDescriptions('（已发送）', [])).toBe('');
+  });
+
+  it('混在正文里时只剔除该分句', () => {
+    expect(stripStickerDescriptions('哈哈哈好家伙|||（发过去了）', ['呆滞傻笑'])).toBe('哈哈哈好家伙');
+  });
+
+  it('正常的括号动作不误删', () => {
+    expect(stripStickerDescriptions('（给你比心）', ['呆滞傻笑'])).toBe('（给你比心）');
   });
 });

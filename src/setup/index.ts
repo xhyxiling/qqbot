@@ -20,6 +20,7 @@ import { registerBindRoutes, type UpdateRouteHooks, type WebServerLike } from '.
 import { createBrowserPresenter, createTerminalPresenter, isDesktopHost } from './presenters.ts';
 import { persistCredentialsToProfile, type SetupCredentials } from './persist.ts';
 import { getProfileDir } from '../shared/index.ts';
+import { maybeAutoStartNapcat } from '../onebot/napcat.ts';
 import { runUpdate, type InstallationInfo } from '../update/update-service.ts';
 
 export type { SetupCredentials } from './persist.ts';
@@ -104,12 +105,20 @@ export async function ensureCredentials(
       availableTools: options.availableTools,
       listPersonaProfiles: options.listPersonaProfiles,
       update: createUpdateHooks(ctx, logger),
+      napcatConfig: () => options.config,
     });
     // 回调作用域（服务卸载/替换、插件卸载）连带注销路由
     (scoped as unknown as { effect(fn: () => () => void, name?: string): void }).effect(() => {
       return disposeRoutes;
     }, 'im-qqbot.bind-routes');
   });
+
+  // NapCat 托管：已安装且未运行时自动拉起（非阻塞，失败只告警）
+  try {
+    maybeAutoStartNapcat(options.config, logger);
+  } catch (err) {
+    logger.warn(`im-qqbot: NapCat 自动启动检查失败: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   return service.start();
 }
@@ -140,11 +149,19 @@ export function registerBoundCredentialRoutes(
       availableTools,
       listPersonaProfiles,
       update: createUpdateHooks(ctx, logger),
+      napcatConfig: () => config,
     });
     (scoped as unknown as { effect(fn: () => () => void, name?: string): void }).effect(() => {
       return disposeRoutes;
     }, 'im-qqbot.bind-routes');
   });
+
+  // NapCat 托管：已安装且未运行时自动拉起（非阻塞，失败只告警）
+  try {
+    maybeAutoStartNapcat(config, logger);
+  } catch (err) {
+    logger.warn(`im-qqbot: NapCat 自动启动检查失败: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 /** 手动凭据持久化（失败时返回可展示的错误） */

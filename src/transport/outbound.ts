@@ -57,6 +57,37 @@ interface ToolCallRecord {
 const SILENT_TURN_ERROR_CODES = new Set(['STREAM_CLOSED']);
 
 /**
+ * 丢掉描述「本轮已发表情」的分句。
+ *
+ * 模型发完图后常补一句「戴花帽子这只，呆呆的」——图用户自己看得见，这种解说
+ * 只会显得把人当傻子。这里按发送时记下的表情描述/标签片段，把命中的 ||| 分句
+ * 整段去掉；没命中的正文（正常聊天内容）原样保留。
+ *
+ * 另外模型爱用括号汇报动作（「（发过去了）」「（已发送）」），这是给自己看的
+ * 状态说明，不该发给对方：整条回复只是这种短状态时直接丢弃，混在正文里则按
+ * 分句剔除。
+ */
+export function stripStickerDescriptions(text: string, tokens: readonly string[] | undefined): string {
+  const meta = /(正文留空|表情已发送|已发送|发送成功)/;
+  // 「（发过去了）」「（已发送）」「（丢给你了）」这类纯动作汇报：短括号 + 发送类动词。
+  // 不匹配「（给你比心）」这种正常括号动作，避免误删人格表达。
+  const PAREN_STATUS = /^[（(]\s*(?:已经?|已)?\s*(?:发|丢|递)[^（）()\r\n]{0,8}[）)]$/;
+  const isParenStatus = (segment: string): boolean => PAREN_STATUS.test(segment);
+
+  if (tokens === undefined || tokens.length === 0) {
+    return isParenStatus(text.trim()) ? '' : text;
+  }
+  const kept = text
+    .split('|||')
+    .map((segment) => segment.trim())
+    .filter((segment) => segment !== ''
+      && !meta.test(segment)
+      && !isParenStatus(segment)
+      && !tokens.some((token) => segment.includes(token)));
+  return kept.join('|||');
+}
+
+/**
  * 语音朗读适配器（voice/voice-reply.ts 的 VoiceSpeaker 满足）。
  *
  * 语音是可选能力：配置缺失时 bootstrap 不注入，路由器按「没有语音」运行。
@@ -204,9 +235,11 @@ class OutboundRouter {
    * 开启多消息拆分时关闭流式：QQ 流式只能在一条消息内全量替换，
    * 无法拆成多条独立消息。本轮模型选择了语音回复时同样不流式：正文只用于
    * 合成，若先流出去就会和语音重复。
+   * OneBot 通道没有流式接口，openStream 只是空会话，必须走静态发送。
    */
   private shouldStream(record: SessionRecord): boolean {
-    return (this.config.replySplitMode ?? 'none') === 'none'
+    return (record.replyTarget.channel ?? 'official') === 'official'
+      && (this.config.replySplitMode ?? 'none') === 'none'
       && this.config.streaming
       && record.replyTarget.scope === 'c2c'
       && !!record.replyTarget.msgId
@@ -223,11 +256,26 @@ class OutboundRouter {
         // 边流边调 qqbot_voice：文字已经可见，记下来，轮末不再补语音
         if (buffer.delivered) this.markTextSent(sessionId, buffer.text);
         buffer.cancel();
-      } else {
-        this.markTextSent(sessionId, buffer.text);
-        this.trackText(sessionId, buffer.flush());
+        this.buffers.delete(sessionId);
+        return;
       }
+
+      // 已经流式推出去的内容无法撤回；未推送时按过滤后的文本静态发送
+      if (buffer.delivered) {
+        this.trackText(sessionId, buffer.flush());
+        this.buffers.delete(sessionId);
+        return;
+      }
+
+      const filtered = stripStickerDescriptions(buffer.text, record.stickerDescTokens);
+      buffer.cancel();
       this.buffers.delete(sessionId);
+      if (!filtered.trim()) {
+        this.logger.info(`im-qqbot: 丢弃整条表情解说（session=${sessionId}）`);
+        return;
+      }
+      this.markTextSent(sessionId, filtered);
+      this.trackText(sessionId, this.send(record, filtered, 'sendMarkdown'));
       return;
     }
 
@@ -242,8 +290,13 @@ class OutboundRouter {
     this.buffers.delete(sessionId);
     // 语音回复：正文只用于合成，不发文字（否则用户会收到同样的内容两遍）
     if (record.voiceRequested === true) return;
-    this.markTextSent(sessionId, fullText);
-    this.trackText(sessionId, this.send(record, fullText, 'sendMarkdown'));
+    const filtered = stripStickerDescriptions(fullText, record.stickerDescTokens);
+    if (!filtered.trim()) {
+      this.logger.info(`im-qqbot: 丢弃整条表情解说（session=${sessionId}）`);
+      return;
+    }
+    this.markTextSent(sessionId, filtered);
+    this.trackText(sessionId, this.send(record, filtered, 'sendMarkdown'));
   }
 
   /** 记录本轮已发出的 assistant 文本（多条消息按顺序拼接，用于语音轮去重判断） */
@@ -367,8 +420,56 @@ class OutboundRouter {
       if (files.length > 0 && this.deliverer !== undefined) {
         await this.deliverer.deliver(record, files);
       }
+      // 模型通过 qqbot_control 安排的新会话/压缩：本轮已结束，可以安全执行
+      const pendingControl = record.pendingControl;
+      if (pendingControl !== undefined) {
+        delete record.pendingControl;
+        await this.runPendingControl(record, pendingControl);
+      }
       this.logger.debug(`im-qqbot: turn/end sessionId=${sessionId}`);
     })();
+  }
+
+  /**
+   * 执行 qqbot_control 安排的轮末操作。
+   *
+   * new：换新 session（清空上下文，长期记忆保留）；compact：原地压缩历史。
+   * 失败只发一条简短提示，绝不把内部错误抛回宿主。
+   */
+  private async runPendingControl(
+    record: SessionRecord,
+    pending: NonNullable<SessionRecord['pendingControl']>,
+  ): Promise<void> {
+    try {
+      await record.agent.whenIdle();
+    } catch {
+      // whenIdle 失败不阻断：最坏情况是 busy，下面按各操作的返回值提示
+    }
+    try {
+      if (pending.action === 'new') {
+        await this.manager.remove(record.scope, record.peerId);
+        await this.send(record, '已开启新会话 ✓', 'sendControlResult');
+        return;
+      }
+      const outcome = await this.manager.compact(record.scope, record.peerId, {
+        senderId: record.senderId,
+        replyTarget: record.replyTarget,
+      });
+      const text = outcome.ok
+        ? (outcome.shadowed
+          ? `✅ 已压缩 ${outcome.shadowed} 条历史记录（约 ${outcome.tokens ?? 0} tokens）`
+          : '没有可压缩的历史')
+        : outcome.reason === 'busy'
+          ? '正在生成中，稍后再试一次压缩'
+          : `压缩失败: ${outcome.message ?? '未知错误'}`;
+      await this.send(record, text, 'sendControlResult');
+    } catch (err) {
+      this.logger.warn(
+        `im-qqbot: 轮末控制操作失败 action=${pending.action}: `
+        + `${err instanceof Error ? err.message : String(err)}`,
+      );
+      await this.send(record, `操作失败: ${pending.action}`, 'sendControlResult');
+    }
   }
 
   /** 统一发送：换行拆分 + 长度切分 + 顺序发送 + 错误记录 */

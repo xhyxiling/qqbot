@@ -14,6 +14,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
   BIND_CONFIG_PATH,
   BIND_MANUAL_PATH,
+  BIND_NAPCAT_PATH,
   BIND_PERSONAS_PATH,
   BIND_REFRESH_PATH,
   BIND_STATE_PATH,
@@ -1257,6 +1258,26 @@ describe('bind-routes', () => {
       const res = await postConfig(routes, '{"personaAnalysis":{"autoAnalyze":"yes"}}');
       expect(res.statusCode).toBe(400);
       expect(json(res)).toMatchObject({ ok: false, error: expect.stringContaining('布尔') });
+    });
+  });
+
+  describe('NapCat 托管路由', () => {
+    it('GET 返回 ok + 状态（非 Windows 为 unsupported）', async () => {
+      // 非 Windows 直接返回 unsupported，不触发任何探测/网络请求
+      const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
+      try {
+        const { routes } = createHarness({
+          napcatConfig: () => ({ onebot: { httpUrl: 'http://127.0.0.1:3000' } }),
+        });
+        const res = fakeRes();
+        await invoke(routes.get(BIND_NAPCAT_PATH), fakeReq('GET', { host: '127.0.0.1:3080' }), res);
+        expect(res.statusCode).toBe(200);
+        const body = json(res) as { ok: boolean; state?: { phase: string } };
+        expect(body.ok).toBe(true);
+        expect(body.state?.phase).toBe('unsupported');
+      } finally {
+        platform.mockRestore();
+      }
     });
   });
 });

@@ -36,7 +36,11 @@ interface ProcessedMessage {
   timestamp: string;
   groupOpenid?: string;
   msgType?: number;
+  /** @ 列表（SDK / OneBot 都会带；is_you 表示 @ 的是机器人自己） */
+  mentions?: Array<{ is_you?: boolean }>;
   attachments?: RawAttachment[];
+  /** 入站时由传输层标记的通道（OneBot 私聊/群聊必须保留，否则出站回退到官方通道） */
+  replyTarget?: ReplyTarget;
   [key: string]: unknown;
 }
 
@@ -85,6 +89,20 @@ interface ProcessedAttachment {
 // ── 主处理函数 ──
 
 /**
+ * 群聊是否真的 @ 了机器人。
+ *
+ * 中间件链里已有 mentionGate，这里再判一次作为硬门控：官方与 OneBot 的字段
+ * 不完全一致（rawEventType / mentions / 正文 @id），配置或 SDK 升级漏掉判定时
+ * 也不能让未 @ 的群消息进模型。历史与人格档案在更早的中间件里已记录，不受影响。
+ */
+function isGroupAddressed(msg: ProcessedMessage, config: ImQQBotConfig): boolean {
+  if (msg.rawEventType === 'GROUP_AT_MESSAGE_CREATE') return true;
+  if (Array.isArray(msg.mentions) && msg.mentions.some((mention) => mention?.is_you === true)) return true;
+  const selfId = config.onebot?.selfId?.trim() ?? '';
+  return selfId !== '' && (msg.content ?? '').includes(`@${selfId}`);
+}
+
+/**
  * 处理 QQ 入站消息（已经过 SDK 中间件链）
  */
 export async function handleInbound(
@@ -100,10 +118,14 @@ export async function handleInbound(
   const scope: ChatScope = msg.kind === 'group' ? 'group' : 'c2c';
   const peerId = scope === 'group' ? (msg.groupOpenid ?? msg.senderId) : msg.senderId;
 
+  // 通道标记：官方通道把 channel 设在 ctx.replyTarget 上，OneBot 放在 msg.replyTarget 里
+  const replyChannel = (ctx.replyTarget as unknown as { channel?: ReplyTarget['channel'] })?.channel
+    ?? msg.replyTarget?.channel;
   const replyTarget: ReplyTarget = {
     scope,
     targetId: peerId,
     msgId: msg.messageId,
+    ...(replyChannel !== undefined ? { channel: replyChannel } : {}),
   };
 
   // ── 自动收藏群里的图片（异步旁路，不阻塞消息处理） ──
@@ -127,6 +149,13 @@ export async function handleInbound(
       msg.content?.trim() || undefined,
       getRecentSessionText(stickerSessionKey),
     ).catch(() => { /* 收藏失败不影响主流程 */ });
+  }
+
+  // ── 群聊 @ 硬门控 ──
+  // 群聊只回复 @ 了机器人的消息；未 @ 的消息只进历史/人格档案，不触发回复。
+  if (scope === 'group' && config.requireMention && !isGroupAddressed(msg, config)) {
+    logger.debug(`skip group message without @: sender=${msg.senderId} group=${peerId}`);
+    return;
   }
 
   // ── 组装 agentBody（下载结果经 mwState.downloadedFiles 提供） ──
@@ -162,6 +191,8 @@ export async function handleInbound(
   // 上一轮的请求不会延续到这一轮，避免「发完文字又补一条语音」的重复。
   delete record.voiceRequested;
   delete record.voiceInstruction;
+  // 上一轮发表情留下的描述片段只作用于那一轮
+  delete record.stickerDescTokens;
 
   const message = createUserMessage({
     content,

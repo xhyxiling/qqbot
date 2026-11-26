@@ -1,5 +1,5 @@
 /**
- * PrefsStore — per-peer 会话偏好持久化（模型 + preset + 人格）
+ * PrefsStore — 会话偏好持久化（模型 + preset + 全局人格）
  *
  * 隔离文件 I/O 操作，便于单元测试时 mock。
  * 存储路径：~/.dsh-qqbot/model-prefs.json
@@ -19,8 +19,8 @@ interface PrefsFile {
   sessionIds: Record<string, string>;
   /** sessionKey → preset id（per-peer preset 覆盖） */
   presets: Record<string, string>;
-  /** sessionKey → persona id（per-peer 人格覆盖） */
-  personas: Record<string, string>;
+  /** 全局人格覆盖（所有群/私聊统一生效；旧版本这里是 per-session map，读到会忽略） */
+  globalPersona?: string;
 }
 
 export class PrefsStore {
@@ -30,8 +30,8 @@ export class PrefsStore {
   private sessionIds = new Map<string, string>();
   /** per-peer preset 偏好（内存态） */
   private presets = new Map<string, string>();
-  /** per-peer 人格偏好（内存态） */
-  private personas = new Map<string, string>();
+  /** 全局人格覆盖（内存态） */
+  private globalPersona?: string;
   /** 隔离偏好文件路径 */
   private readonly prefsPath: string;
   private readonly debugLog?: DebugFn;
@@ -97,21 +97,22 @@ export class PrefsStore {
     return deleted;
   }
 
-  // ── Persona 操作 ──
+  // ── 全局人格操作 ──
 
-  getPersona(sessionKey: string): string | undefined {
-    return this.personas.get(sessionKey);
+  getGlobalPersona(): string | undefined {
+    return this.globalPersona;
   }
 
-  setPersona(sessionKey: string, personaId: string): void {
-    this.personas.set(sessionKey, personaId);
+  setGlobalPersona(personaId: string): void {
+    this.globalPersona = personaId;
     this.write();
   }
 
-  clearPersona(sessionKey: string): boolean {
-    const deleted = this.personas.delete(sessionKey);
-    if (deleted) this.write();
-    return deleted;
+  clearGlobalPersona(): boolean {
+    if (this.globalPersona === undefined) return false;
+    this.globalPersona = undefined;
+    this.write();
+    return true;
   }
 
   // ── 私有方法 ──
@@ -142,12 +143,8 @@ export class PrefsStore {
           }
         }
       }
-      if (data.personas && typeof data.personas === 'object') {
-        for (const [key, personaId] of Object.entries(data.personas)) {
-          if (typeof personaId === 'string' && personaId) {
-            this.personas.set(key, personaId);
-          }
-        }
+      if (typeof data.globalPersona === 'string' && data.globalPersona) {
+        this.globalPersona = data.globalPersona;
       }
     } catch (err) {
       this.debugLog?.(`loadPrefs failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -161,7 +158,7 @@ export class PrefsStore {
         overrides: Object.fromEntries(this.overrides.entries()),
         sessionIds: Object.fromEntries(this.sessionIds.entries()),
         presets: Object.fromEntries(this.presets.entries()),
-        personas: Object.fromEntries(this.personas.entries()),
+        ...(this.globalPersona === undefined ? {} : { globalPersona: this.globalPersona }),
       };
       writeFileSync(this.prefsPath, JSON.stringify(data, null, 2), 'utf8');
     } catch (err) {

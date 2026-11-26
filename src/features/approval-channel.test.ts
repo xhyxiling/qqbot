@@ -162,6 +162,27 @@ describe('ApprovalChannel.install', () => {
     await expect(p).resolves.toBe('allowed-once');
   });
 
+  it('settles a parked approval from a text answer (OneBot without buttons)', async () => {
+    const sent: SentMessage[] = [];
+    const ch = new ApprovalChannel(
+      createManager({ findBySessionId: (id) => (id === 'sess-qq' ? makeRecord(sessionKey('c2c', 'peer-qq')) : undefined) }),
+      createSender(sent),
+      makeConfig(),
+      createLogger(),
+    );
+    const { handler } = installAndCapture(ch, sent);
+
+    const p = handler(makeRequest({ id: 'sess-qq' }), () => Promise.resolve('unavailable' as ApprovalOutcome));
+    await sleep(20);
+
+    // 非审批措辞不误伤普通消息
+    expect(ch.tryAnswer('c2c', 'peer-qq', '今天天气不错')).toBe(false);
+    expect(ch.tryAnswer('c2c', 'unknown-peer', '同意')).toBe(false);
+
+    expect(ch.tryAnswer('c2c', 'peer-qq', '同意')).toBe(true);
+    await expect(p).resolves.toBe('allowed-once');
+  });
+
   it('recovers the gated command from the session log', async () => {
     const sent: SentMessage[] = [];
     const ch = new ApprovalChannel(

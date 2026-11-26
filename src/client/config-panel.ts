@@ -21,8 +21,12 @@
 import { createElement, useCallback, useEffect, useState, type CSSProperties, type ChangeEvent, type FormEvent, type ReactNode } from 'react';
 import {
   BIND_CONFIG_PATH,
+  BIND_NAPCAT_PATH,
   BIND_PERSONAS_PATH,
   BIND_UPDATE_PATH,
+  type NapcatAction,
+  type NapcatActionResponse,
+  type NapcatStateWire,
   type PersonaArchiveStatsWire,
   type PersonaProfileWire,
   type PersonaProfilesResponse,
@@ -137,6 +141,8 @@ interface PersonaWire {
 type ReplySplitMode = 'none' | 'delimiter' | 'line' | 'paragraph';
 
 type ConfigWire = {
+  backend?: 'official' | 'onebot' | 'both';
+  onebot?: OneBotWire;
   requireMention?: boolean;
   streaming?: boolean;
   replySplitMode?: ReplySplitMode;
@@ -157,6 +163,14 @@ type ConfigWire = {
   sticker?: StickerWire;
   cwd?: string;
 };
+
+/** OneBot 11 连接配置（普通 QQ 账号） */
+interface OneBotWire {
+  httpUrl?: string;
+  wsUrl?: string;
+  accessToken?: string;
+  selfId?: string;
+}
 
 /** 表情包存储配置（与 src/sticker/types.ts 的 StickerStorageConfig 对应的局部投影） */
 interface StickerStorageWire {
@@ -1317,6 +1331,12 @@ const MODE_OPTIONS: ReadonlyArray<{ value: AccessMode; label: string }> = [
   { value: 'disabled', label: '禁用' },
 ];
 
+const BACKEND_OPTIONS: ReadonlyArray<{ value: 'official' | 'onebot' | 'both'; label: string }> = [
+  { value: 'official', label: '官方机器人' },
+  { value: 'onebot', label: '普通 QQ 账号' },
+  { value: 'both', label: '两者同时' },
+];
+
 const SPLIT_OPTIONS: ReadonlyArray<{ value: ReplySplitMode; label: string }> = [
   { value: 'none', label: '按长度' },
   { value: 'delimiter', label: '约定分隔符' },
@@ -1325,7 +1345,7 @@ const SPLIT_OPTIONS: ReadonlyArray<{ value: ReplySplitMode; label: string }> = [
 ];
 
 /** 配置分区：每页只展示一组相关配置，避免单列过长 */
-type TabId = 'access' | 'identity' | 'members' | 'conversation' | 'voice' | 'sticker' | 'model' | 'personas' | 'update';
+type TabId = 'backend' | 'access' | 'identity' | 'members' | 'conversation' | 'voice' | 'sticker' | 'model' | 'personas' | 'update';
 
 interface TabDef {
   id: TabId;
@@ -1335,6 +1355,7 @@ interface TabDef {
 }
 
 const TABS: ReadonlyArray<TabDef> = [
+  { id: 'backend', label: '连接方式', keys: ['backend', 'onebot'] },
   { id: 'access', label: '服务范围', keys: ['access'] },
   { id: 'identity', label: '身份与权限', keys: ['identity'] },
   { id: 'members', label: '群友人格', keys: ['personaAnalysis'] },
@@ -1368,6 +1389,172 @@ function shortHash(ref: string): string {
 /** 深比较（表单值与初始回显值的 dirty 判断） */
 function shallowEqual(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** NapCat 托管阶段的中文文案 */
+function napcatPhaseLabel(state: NapcatStateWire): string {
+  switch (state.phase) {
+    case 'unsupported': return '当前系统不支持自动安装';
+    case 'not_installed': return '未安装';
+    case 'installing': return `正在安装${state.progress !== undefined ? ` ${state.progress}%` : ''}`;
+    case 'installed': return '已安装，未启动';
+    case 'starting': return '正在启动';
+    case 'running': return state.uin !== undefined ? `运行中（${state.uin}）` : '运行中';
+    case 'login_required': return '等待扫码登录';
+    case 'error': return '出错';
+    default: return state.phase;
+  }
+}
+
+/**
+ * NapCat 托管卡片（「服务范围」页签，普通 QQ 号模式）。
+ *
+ * 挂载时 GET 状态；installing/starting 时每 2s 轮询；
+ * 动作统一 POST `{ action }`，busy 时按钮禁用。
+ */
+function NapcatCard(): ReactNode {
+  const [napcat, setNapcat] = useState<NapcatStateWire | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [webuiFallback, setWebuiFallback] = useState(false);
+
+  const load = useCallback((): void => {
+    void fetch(BIND_NAPCAT_PATH, { cache: 'no-store' })
+      .then(async (res) => {
+        const body = (await res.json().catch(() => ({}))) as {
+          ok?: boolean; state?: NapcatStateWire; error?: string;
+        };
+        if (body.state === undefined) {
+          setError(`读取 NapCat 状态失败（HTTP ${res.status}）`);
+          return;
+        }
+        setNapcat(body.state);
+        setError(body.ok === false ? (body.error ?? null) : null);
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : String(err));
+      });
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  // 安装 / 启动是长任务：轮询期间让按钮保持禁用
+  const phase = napcat?.phase;
+  useEffect(() => {
+    if (phase !== 'installing' && phase !== 'starting') return;
+    const timer = setInterval(load, 2000);
+    return () => { clearInterval(timer); };
+  }, [phase, load]);
+
+  const act = useCallback((action: NapcatAction): void => {
+    setBusy(true);
+    setError(null);
+    void fetch(BIND_NAPCAT_PATH, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action }),
+    })
+      .then(async (res) => {
+        const body = (await res.json().catch(() => ({}))) as NapcatActionResponse;
+        if (body.state !== undefined) setNapcat(body.state);
+        if (body.ok !== true) setError(body.error ?? body.message ?? `操作失败（HTTP ${res.status}）`);
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => { setBusy(false); });
+  }, []);
+
+  if (napcat === null) {
+    return createElement('div', { className: 'imqb2-field' },
+      createElement('span', { className: 'imqb2-label' }, 'NapCat 托管'),
+      createElement('p', { className: 'imqb2-hint' }, error ?? '正在读取 NapCat 状态…'),
+    );
+  }
+
+  const openWebui = (): void => {
+    try {
+      // 浏览器拦截弹窗时返回 null，退化为展示链接文本
+      if (window.open(napcat.webuiUrl, '_blank', 'noopener') === null) setWebuiFallback(true);
+    } catch {
+      setWebuiFallback(true);
+    }
+  };
+
+  const actions: ReactNode[] = [];
+  if (busy || napcat.phase === 'installing' || napcat.phase === 'starting') {
+    actions.push(createElement('button', {
+      key: 'pending', type: 'button', className: 'imqb2-save', disabled: true,
+    }, napcat.phase === 'installing'
+      ? `正在安装${napcat.progress !== undefined ? ` ${napcat.progress}%` : '…'}`
+      : napcat.phase === 'starting' ? '正在启动…' : '处理中…'));
+  } else if (napcat.phase === 'not_installed') {
+    actions.push(createElement('button', {
+      key: 'install', type: 'button', className: 'imqb2-save',
+      onClick: () => { act('install'); },
+    }, '下载并安装'));
+  } else if (napcat.phase === 'installed' || napcat.phase === 'login_required') {
+    // OneKey 包里只有安装向导，没有启动脚本：等向导跑完再刷新，别给「启动」误导
+    if (napcat.launcher !== undefined) {
+      actions.push(createElement('button', {
+        key: 'start', type: 'button', className: 'imqb2-save',
+        onClick: () => { act('start'); },
+      }, '启动'));
+    }
+  } else if (napcat.phase === 'running') {
+    // 外部 NapCat 没有托管 pid，停不掉，只提供 WebUI 入口
+    if (napcat.launcher !== undefined) {
+      actions.push(createElement('button', {
+        key: 'stop', type: 'button', className: 'imqb2-save',
+        onClick: () => { act('stop'); },
+      }, '停止'));
+    }
+    actions.push(createElement('button', {
+      key: 'webui', type: 'button', className: 'imqb2-persona-add',
+      onClick: openWebui,
+    }, '打开 WebUI'));
+  } else if (napcat.phase === 'error') {
+    actions.push(createElement('button', {
+      key: 'retry', type: 'button', className: 'imqb2-save',
+      onClick: () => { act(napcat.launcher !== undefined ? 'start' : 'install'); },
+    }, napcat.launcher !== undefined ? '重试启动' : '重试安装'));
+  }
+  if (napcat.phase !== 'installing') {
+    actions.push(createElement('button', {
+      key: 'refresh', type: 'button', className: 'imqb2-persona-add', disabled: busy,
+      onClick: () => { load(); },
+    }, '刷新'));
+  }
+
+  return createElement('div', { className: 'imqb2-field' },
+    createElement('div', { className: 'imqb2-head' },
+      createElement('span', { className: 'imqb2-label' }, 'NapCat 托管'),
+      createElement('span', { className: 'imqb2-hint' }, napcatPhaseLabel(napcat)),
+    ),
+    createElement('p', { className: 'imqb2-readonly' }, `安装目录：${napcat.installDir}`),
+    napcat.qqPath !== undefined
+      ? createElement('p', { className: 'imqb2-hint' }, `QQ 路径：${napcat.qqPath}`)
+      : null,
+    napcat.phase === 'installing'
+      ? createElement('p', { className: 'imqb2-hint' }, `下载进度：${napcat.progress ?? 0}%`)
+      : null,
+    error !== null
+      ? createElement('p', { className: 'imqb2-hint-warn' }, error)
+      : napcat.message !== undefined
+        ? createElement('p', { className: 'imqb2-hint' }, napcat.message)
+        : null,
+    napcat.phase === 'unsupported'
+      ? createElement('p', { className: 'imqb2-hint' },
+          '请手动下载 NapCat 并解压，然后在下面的 HTTP / WebSocket 地址里填写它的监听端口：'
+          + 'https://github.com/NapNeko/NapCatQQ/releases')
+      : null,
+    webuiFallback
+      ? createElement('p', { className: 'imqb2-hint' }, `浏览器拦住了新窗口，请手动打开：${napcat.webuiUrl}`)
+      : null,
+    actions.length > 0
+      ? createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '4px' } }, ...actions)
+      : null,
+  );
 }
 
 /**
@@ -1607,6 +1794,11 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
   const changedKeys = (Object.keys(form) as Array<keyof ConfigWire>)
     .filter((key) => !shallowEqual(form[key], initial[key]));
   const dirty = changedKeys.length > 0;
+  const backend: 'official' | 'onebot' | 'both' = form.backend === 'onebot'
+    ? 'onebot'
+    : form.backend === 'both' ? 'both' : 'official';
+  const onebot: OneBotWire = form.onebot
+    ?? { httpUrl: 'http://127.0.0.1:3000', wsUrl: 'ws://127.0.0.1:3001', accessToken: '', selfId: '' };
   const access: AccessControlWire = form.access ?? { c2cMode: 'allowlist', c2cAllow: [], groupMode: 'open', groupAllow: [] };
   const identity: IdentityWire = form.identity
     ?? { enabled: true, ownerOpenIds: [], adminOpenIds: [], friendOpenIds: [] };
@@ -1715,6 +1907,56 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
   const tabDirty = (tab: TabDef): boolean => tab.keys.some((key) => changedKeys.includes(key));
 
   // 各分区内容：只渲染当前 tab，表单值始终保存在 form 中，切换不会丢失编辑
+  const usesOneBot = backend !== 'official';
+  const backendPanel: ReactNode[] = [
+    createElement(SegmentedRow, {
+      label: '连接方式',
+      value: backend,
+      options: BACKEND_OPTIONS,
+      help: '官方机器人需要 AppID/AppSecret；普通 QQ 账号需要在本机运行 NapCat / LLOneBot 等 OneBot 11 实现',
+      onChange: (v) => { patch('backend', v as 'official' | 'onebot' | 'both'); },
+    }),
+    usesOneBot
+      ? createElement(FieldRow, {
+          label: 'HTTP 地址', placeholder: 'http://127.0.0.1:3000',
+          value: onebot.httpUrl ?? '',
+          help: 'OneBot 的 HTTP API 地址（用于发送消息与调用接口）',
+          onChange: (v) => { patch('onebot', { ...onebot, httpUrl: v.trim() }); },
+        })
+      : null,
+    usesOneBot
+      ? createElement(FieldRow, {
+          label: 'WebSocket 地址', placeholder: 'ws://127.0.0.1:3001',
+          value: onebot.wsUrl ?? '',
+          help: 'OneBot 的正向 WebSocket 地址（用于接收消息事件）',
+          onChange: (v) => { patch('onebot', { ...onebot, wsUrl: v.trim() }); },
+        })
+      : null,
+    usesOneBot
+      ? createElement(FieldRow, {
+          label: '访问令牌', placeholder: '未设置可留空', type: 'password',
+          value: onebot.accessToken ?? '',
+          help: '与 OneBot 配置里的 access_token 保持一致；本机未设置时留空',
+          onChange: (v) => { patch('onebot', { ...onebot, accessToken: v.trim() }); },
+        })
+      : null,
+    usesOneBot
+      ? createElement(FieldRow, {
+          label: '机器人 QQ 号', placeholder: '留空自动读取',
+          value: onebot.selfId ?? '',
+          help: '用于识别群聊里是否 @ 了机器人；留空时启动后自动从登录信息读取',
+          onChange: (v) => { patch('onebot', { ...onebot, selfId: v.trim() }); },
+        })
+      : null,
+    usesOneBot
+      ? createElement('p', { className: 'imqb2-hint', style: { padding: '8px 0 0' } },
+          '普通 QQ 账号通道的身份/白名单填 QQ 号（官方机器人仍是 openid）；'
+          + 'NapCat 与本插件需在同一台机器上，图片/文件才能被读取与发送。')
+      : createElement('p', { className: 'imqb2-hint', style: { padding: '8px 0 0' } },
+          '官方机器人模式的凭据请在「绑定」页扫码或手动填写。'),
+    usesOneBot ? createElement(NapcatCard, { key: 'napcat' }) : null,
+  ];
+
   const accessPanel: ReactNode[] = [
     createElement(SegmentedRow, {
       label: '私聊', value: access.c2cMode, options: MODE_OPTIONS,
@@ -2316,6 +2558,7 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
   ];
 
   const panels: Record<TabId, ReactNode[]> = {
+    backend: backendPanel,
     access: accessPanel,
     identity: identityPanel,
     members: membersPanel,

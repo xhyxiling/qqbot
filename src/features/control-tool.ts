@@ -1,0 +1,261 @@
+/**
+ * qqbot_control — 让主人/管理员用自然语言管理系统设置
+ *
+ * 以前管理操作只能手打斜杠命令（/persona、/memory、/model…），聊天里说一句
+ * 「换成猫娘人格」模型却做不了。这个工具把模型的管理意图接到既有命令处理器上：
+ * 模型判断该做什么，工具负责鉴权、参数拼装与结果收集，用户全程不用写斜杠。
+ *
+ * new / compact 需要等本轮结束（agent 仍在运行，立刻重建会打断自己），
+ * 因此只给会话打 `pendingControl` 标记，由出站侧在轮末执行。
+ *
+ * 非主人/管理员调用时返回 not_applicable：prompt 要求模型当普通聊天接住，
+ * 绝不能出现「权限/管理员/不能」这类词。
+ */
+import type { Context } from '@deepseek-ai/cordis';
+import type { ContentBlock } from '@deepseek-ai/dsh-llm';
+import type { ImQQBotConfig } from '../config.ts';
+import { canUseCommand, isOwnerOrAdmin } from '../identity/role.ts';
+import type { Logger } from '../types.ts';
+import type { SessionManager } from '../session/index.ts';
+import type { DshAgent } from '../session/types.ts';
+import type { PersonaCommandServices } from '../commands/types.ts';
+import { buildCommandList } from '../commands/index.ts';
+
+/** 工具名 */
+export const CONTROL_TOOL_NAME = 'qqbot_control';
+
+/** 支持的 action */
+export const CONTROL_ACTIONS = [
+  'persona',
+  'memory',
+  'new',
+  'compact',
+  'model',
+  'preset',
+  'status',
+  'tools',
+  'whoami',
+  'help',
+  'ping',
+  'version',
+] as const;
+
+export type ControlAction = (typeof CONTROL_ACTIONS)[number];
+
+/** action → 命令名（new/compact 不走命令，轮末执行） */
+const ACTION_COMMAND: Readonly<Record<string, string>> = {
+  persona: 'persona',
+  memory: 'memory',
+  model: 'model',
+  preset: 'preset',
+  status: 'bot-status',
+  tools: 'tools',
+  whoami: 'whoami',
+  help: 'bot-help',
+  ping: 'bot-ping',
+  version: 'bot-version',
+};
+
+/** 工具结果 */
+export interface ControlResult {
+  ok: boolean;
+  /** 执行结果文本（ok=false 时为空串表示「当普通聊天处理」） */
+  text: string;
+}
+
+/** tools 服务最小接口 */
+interface ToolsRegistryLike {
+  register(definition: unknown): unknown;
+}
+
+/** 注册依赖 */
+export interface ControlToolOptions {
+  manager: SessionManager;
+  config: ImQQBotConfig;
+  logger: Logger;
+  /** /人格分析 所需服务（档案未启用时为 undefined） */
+  persona?: PersonaCommandServices;
+}
+
+/** 把 <qqbot-cmd-input .../> 标签还原成可读文本，避免模型照抄标签 */
+export function stripCommandTags(text: string): string {
+  return text
+    .replace(/<qqbot-cmd-input[^>]*?show="([^"]*)"[^>]*?\/>/g, '「$1」')
+    .replace(/<qqbot-cmd-input[^>]*?\/>/g, '')
+    .trim();
+}
+
+/** 命令名字段归一化成数组 */
+function commandNames(name: string | readonly string[]): string[] {
+  return typeof name === 'string' ? [name] : [...name];
+}
+
+const DESCRIPTION =
+  'Owner/admin control channel for changing this bot\'s own settings through natural language. '
+  + 'Call it when the owner or an admin asks you to switch persona ("换成猫娘人格", "用傲娇的语气"), '
+  + 'remember/forget something about them ("记住我喜欢喝美式", "把我那条忘了"), start a new session '
+  + '("重新开始聊", "清空上下文"), compact history, switch model or preset, or check the bot status. '
+  + 'Never ask the user to type slash commands — just call this tool. '
+  + '`args` is the command argument: persona id (or "default"/"off"), "add 内容"/"del 3"/"clear" for memory, '
+  + '"provider/model" or model id for model, preset id for preset. '
+  + 'Other users (friends/strangers) cannot use it; do not call it for them.';
+
+/**
+ * 注册 qqbot_control 工具（tools 服务不可用时告警跳过，不阻断启动）
+ */
+export function registerControlTool(ctx: Context, options: ControlToolOptions): void {
+  const { manager, config, logger, persona } = options;
+  let tools: ToolsRegistryLike | undefined;
+  try {
+    tools = ctx.get('tools') as ToolsRegistryLike | undefined;
+  } catch {
+    tools = undefined;
+  }
+  if (!tools?.register) {
+    logger.warn(`im-qqbot: tools 服务不可用，${CONTROL_TOOL_NAME} 未注册`);
+    return;
+  }
+
+  const definition = {
+    name: CONTROL_TOOL_NAME,
+    description: DESCRIPTION,
+    parameters: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: [...CONTROL_ACTIONS],
+          description: 'What to do. "new" and "compact" run after this reply is delivered.',
+        },
+        args: {
+          type: 'string',
+          description:
+            'Argument passed to the action. persona: persona id / "default" / "off"; '
+            + 'memory: "add 内容" | "del 序号" | "clear" | omitted to view; '
+            + 'model: "provider/model" or model id or "default"; preset: preset id or "reset".',
+        },
+      },
+      required: ['action'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          ok: { type: 'boolean' },
+          text: { type: 'string' },
+        },
+        required: ['ok', 'text'],
+        additionalProperties: false,
+      },
+      render: (_args: unknown, value: unknown): ContentBlock[] => {
+        const result = value as ControlResult;
+        if (!result.ok) {
+          return [{
+            type: 'text',
+            text: '（这一步用不了）把这句话当成普通聊天接住：用你的语气自然回应或轻轻岔开，'
+              + '不要提权限、管理员、命令、工具，也不要说「做不到」「没资格」。',
+          }];
+        }
+        if (!result.text.trim()) {
+          return [{ type: 'text', text: '已完成。用你的语气简短告诉对方结果即可。' }];
+        }
+        return [{
+          type: 'text',
+          text: `执行结果（用你的语气转述给用户，不要提工具/命令/斜杠/系统/权限）：\n${stripCommandTags(result.text)}`,
+        }];
+      },
+    },
+    async execute(
+      rawArgs: unknown,
+      exec: { signal: AbortSignal; agent?: unknown },
+    ): Promise<ControlResult> {
+      const record = manager.findByAgent(exec.agent as DshAgent);
+      if (record === undefined) {
+        throw new Error(`${CONTROL_TOOL_NAME}: 只能在 QQ 会话里使用`);
+      }
+      const args = (rawArgs ?? {}) as { action?: unknown; args?: unknown };
+      const action = typeof args.action === 'string' ? args.action.trim() : '';
+      const arg = typeof args.args === 'string' ? args.args.trim() : '';
+
+      // 管理操作只对主人/管理员开放；其他人一律当普通聊天处理
+      if (!isOwnerOrAdmin(record.senderId, config.identity)) {
+        logger.info(
+          `im-qqbot: ${CONTROL_TOOL_NAME} 被非管理员调用 key=${record.sessionKey} action=${action}`,
+        );
+        return { ok: false, text: '' };
+      }
+
+      if (action === 'new' || action === 'compact') {
+        record.pendingControl = { action, at: Date.now() };
+        logger.info(`im-qqbot: ${CONTROL_TOOL_NAME} 安排轮末执行 key=${record.sessionKey} action=${action}`);
+        return {
+          ok: true,
+          text: action === 'new'
+            ? '已安排在本轮回复后开启新会话（上下文清空，长期记忆保留）。'
+            : '已安排在本轮回复后压缩上下文历史。',
+        };
+      }
+
+      const commandName = ACTION_COMMAND[action];
+      if (commandName === undefined) {
+        return { ok: false, text: `不支持的操作: ${action || '(空)'}` };
+      }
+
+      const commands = buildCommandList({
+        manager,
+        config,
+        ...(persona !== undefined ? { persona } : {}),
+      });
+      const command = commands.find((cmd) => commandNames(cmd.name as string | readonly string[])
+        .includes(commandName));
+      if (command === undefined) {
+        return { ok: false, text: `该操作当前不可用：${action}` };
+      }
+      if (!canUseCommand(record.senderId, config.identity, command.minRole)) {
+        return { ok: false, text: '' };
+      }
+
+      // 收集命令通过 bot.sendMarkdown 发出的内容（命令内部走分块发送）
+      const collected: string[] = [];
+      const fakeBot = {
+        sendMarkdown: async (_target: unknown, content: string): Promise<void> => {
+          if (typeof content === 'string' && content.trim() !== '') collected.push(content);
+        },
+      };
+      const fakeCtx = {
+        bot: fakeBot,
+        replyTarget: record.replyTarget,
+        receivedAt: Date.now(),
+        message: {
+          kind: record.scope === 'group' ? 'group' : 'c2c',
+          senderId: record.senderId,
+          groupOpenid: record.scope === 'group' ? record.peerId : undefined,
+          messageId: record.replyTarget.msgId,
+          timestamp: new Date().toISOString(),
+        },
+        command: { name: commandName, args: arg ? arg.split(/\s+/) : [], raw: arg },
+      };
+
+      try {
+        const returned = await command.handler(fakeCtx as never);
+        const text = collected.join('\n\n')
+          || (typeof returned === 'string' ? returned : '');
+        logger.info(
+          `im-qqbot: ${CONTROL_TOOL_NAME} 执行 key=${record.sessionKey} `
+          + `action=${action} args=${arg === '' ? '无' : arg}`,
+        );
+        return { ok: true, text };
+      } catch (err) {
+        logger.warn(
+          `im-qqbot: ${CONTROL_TOOL_NAME} 执行失败 action=${action}: `
+          + `${err instanceof Error ? err.message : String(err)}`,
+        );
+        return { ok: false, text: '' };
+      }
+    },
+  };
+
+  tools.register(definition);
+  logger.info(`im-qqbot: ${CONTROL_TOOL_NAME} 工具已注册（主人可用自然语言管理设置）`);
+}

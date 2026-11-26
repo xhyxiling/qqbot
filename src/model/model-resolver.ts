@@ -140,24 +140,24 @@ export class ModelResolver {
   }
 
   /**
-   * 获取指定 sessionKey 的 per-peer 人格覆盖
+   * 获取全局人格覆盖（所有群/私聊统一生效）
    */
-  getPersona(sessionKey: string): string | undefined {
-    return this.prefs.getPersona(sessionKey);
+  getGlobalPersona(): string | undefined {
+    return this.prefs.getGlobalPersona();
   }
 
   /**
-   * 设置 per-peer 人格覆盖并持久化
+   * 设置全局人格覆盖并持久化
    */
-  setPersona(sessionKey: string, personaId: string): void {
-    this.prefs.setPersona(sessionKey, personaId);
+  setGlobalPersona(personaId: string): void {
+    this.prefs.setGlobalPersona(personaId);
   }
 
   /**
-   * 清除 per-peer 人格覆盖并持久化
+   * 清除全局人格覆盖并持久化
    */
-  clearPersona(sessionKey: string): boolean {
-    return this.prefs.clearPersona(sessionKey);
+  clearGlobalPersona(): boolean {
+    return this.prefs.clearGlobalPersona();
   }
 
   /**

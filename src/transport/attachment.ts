@@ -10,6 +10,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { basename, extname, join, sep } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import * as dns from 'node:dns';
+import * as http from 'node:http';
 import * as https from 'node:https';
 import type { Logger, RawAttachment } from '../types.ts';
 import type { MediaConfig } from '../config.ts';
@@ -205,6 +206,56 @@ async function download(url: string, maxBytes: number): Promise<Buffer> {
 }
 
 /**
+ * 宽松下载（OneBot 场景）：允许 http 与内网/回环地址。
+ *
+ * OneBot 实现（NapCat 等）常把媒体暴露为 http://127.0.0.1:3000/... 或
+ * http://gchat.qpic.cn/...，既不是 https 也属于私网地址。此路径仅由
+ * backend=onebot 使用，不做 SSRF 拦截，但仍保留大小上限与超时。
+ */
+function downloadInsecure(url: string, maxBytes: number): Promise<Buffer> {
+  const parsed = new URL(normalizeUrl(url));
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`Unsupported protocol: ${parsed.protocol}`);
+  }
+
+  return new Promise((resolve, reject) => {
+    const client = parsed.protocol === 'https:' ? https : http;
+    const req = client.request({
+      method: 'GET',
+      hostname: parsed.hostname,
+      port: parsed.port !== '' ? Number(parsed.port) : (parsed.protocol === 'https:' ? 443 : 80),
+      path: parsed.pathname + parsed.search,
+      headers: {
+        Host: parsed.hostname,
+        'User-Agent': 'dsh-qqbot/1.0',
+      },
+      timeout: DOWNLOAD_TIMEOUT_MS,
+    }, (res) => {
+      if (res.statusCode !== 200 && res.statusCode !== 206) {
+        reject(new Error(`HTTP ${res.statusCode}`));
+        return;
+      }
+      let bytes = 0;
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk: Buffer) => {
+        bytes += chunk.length;
+        if (bytes > maxBytes) {
+          reject(new Error(`Download exceeds ${Math.floor(maxBytes / 1024 / 1024)}MB`));
+          req.destroy();
+          return;
+        }
+        chunks.push(chunk);
+      });
+      res.on('end', () => resolve(Buffer.concat(chunks)));
+      res.on('error', reject);
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(new Error('Download timeout')); });
+    req.end();
+  });
+}
+
+/**
  * 下载消息中的富媒体附件（image/video/file）到本地
  *
  * 下载目录固定为 ~/.dsh-qqbot/media，文件名用时间戳+随机数防重名。
@@ -214,6 +265,7 @@ export async function downloadMediaAttachments(
   attachments: RawAttachment[] | undefined,
   media: MediaConfig,
   logger: Logger,
+  options: { allowHttp?: boolean } = {},
 ): Promise<DownloadedFile[]> {
   if (!media.enabled) return [];
 
@@ -238,7 +290,9 @@ export async function downloadMediaAttachments(
 
     let bytes: number;
     try {
-      const buf = await download(att.url, maxBytes);
+      const buf = options.allowHttp === true
+        ? await downloadInsecure(att.url, maxBytes)
+        : await download(att.url, maxBytes);
       if (contentType === 'image') localPath = correctImageExtension(localPath, buf);
       writeFileSync(localPath, buf);
       bytes = buf.length;

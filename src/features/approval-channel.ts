@@ -87,6 +87,21 @@ interface PendingApproval {
 const COMMAND_CLIP = 500;
 
 /**
+ * 文本审批关键词 → outcome。
+ *
+ * 只在「该会话确有 pending 审批」时生效（调用方先查 pending），
+ * 因此不会把普通聊天里的「好」误判成审批；这里仍只接受明确措辞。
+ */
+function parseApprovalText(text: string): ApprovalOutcome | undefined {
+  const normalized = text.trim().toLowerCase();
+  if (normalized === '') return undefined;
+  if (/^(同意|允许|批准|通过|允许一次|ok|yes|y)$/.test(normalized)) return 'allowed-once';
+  if (/^(拒绝|不同意|不允许|驳回|no|n)$/.test(normalized)) return 'rejected';
+  if (/^(取消|cancel)$/.test(normalized)) return 'cancelled';
+  return undefined;
+}
+
+/**
  * 从 session log 按 callId 找回被 gate 的命令（审批请求本身不重复携带 arguments）。
  * 对齐 TUI/web 的 `commandOf` 语义。
  */
@@ -165,6 +180,22 @@ export class ApprovalChannel {
     this.pending.delete(sessionKey);
     this.removeAbort(entry);
     entry.resolve('cancelled');
+  }
+
+  /** 文本作答：没有按钮（OneBot / 普通 QQ 账号）时用「同意 / 拒绝」决策 */
+  public tryAnswer(scope: ChatScope, peerId: string, text: string): boolean {
+    const record = this.manager.getSessionRecord(scope, peerId);
+    if (!record) return false;
+    const entry = this.pending.get(record.sessionKey);
+    if (!entry) return false;
+    const outcome = parseApprovalText(text);
+    if (outcome === undefined) return false;
+
+    this.pending.delete(record.sessionKey);
+    this.removeAbort(entry);
+    this.logger.info(`im-qqbot: approval answered by text key=${record.sessionKey}`);
+    entry.resolve(outcome);
+    return true;
   }
 
   /** 按钮点击决策：解码 button_data，校验点击者授权，settle pending 审批 */

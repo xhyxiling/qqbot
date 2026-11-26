@@ -9,18 +9,34 @@ import { downloadMediaAttachments } from '../transport/attachment.ts';
 import type { ImQQBotConfig } from '../config.ts';
 import type { Logger, QuotedAttachment, RawAttachment } from '../types.ts';
 
-export function attachmentProcessor(config: ImQQBotConfig, logger: Logger) {
+export function attachmentProcessor(
+  config: ImQQBotConfig,
+  logger: Logger,
+  options: {
+    allowInsecureMedia?: boolean;
+    /** 是否下载当前消息附件（默认 true）；门控前那趟只收当前消息 */
+    downloadCurrent?: boolean;
+    /** 是否下载引用消息附件（默认 true）；门控后那趟只补引用 */
+    downloadQuote?: boolean;
+  } = {},
+) {
+  const downloadCurrent = options.downloadCurrent !== false;
+  const downloadQuote = options.downloadQuote !== false;
   return async (ctx: MiddlewareContext, next: () => Promise<void>): Promise<void> => {
     const msg = ctx.message as { attachments?: RawAttachment[] };
 
     try {
       // 当前消息附件
-      const downloaded = await downloadMediaAttachments(msg.attachments, config.media, logger);
-      ctx.state.downloadedFiles = downloaded;
+      if (downloadCurrent) {
+        const downloaded = await downloadMediaAttachments(msg.attachments, config.media, logger, {
+          allowHttp: options.allowInsecureMedia === true,
+        });
+        ctx.state.downloadedFiles = downloaded;
+      }
 
       // 引用消息附件：转成 RawAttachment 结构复用下载（voice 由 downloadMediaAttachments 自动跳过）
       const quoteAttachments = (ctx.state as { quote?: { attachments?: QuotedAttachment[] } }).quote?.attachments;
-      if (quoteAttachments && quoteAttachments.length > 0) {
+      if (downloadQuote && quoteAttachments && quoteAttachments.length > 0) {
         const rawQuote = quoteAttachments
           .filter(a => a.url)
           .map((a): RawAttachment => ({
@@ -29,7 +45,9 @@ export function attachmentProcessor(config: ImQQBotConfig, logger: Logger) {
             size: 0,
             url: a.url as string,
           }));
-        const downloadedQuote = await downloadMediaAttachments(rawQuote, config.media, logger);
+        const downloadedQuote = await downloadMediaAttachments(rawQuote, config.media, logger, {
+          allowHttp: options.allowInsecureMedia === true,
+        });
         ctx.state.downloadedQuoteFiles = downloadedQuote;
       }
     } catch (err) {

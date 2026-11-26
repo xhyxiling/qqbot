@@ -22,7 +22,7 @@ export function buildApprovalText(request: ApprovalRequest, command?: string): s
     lines.push(`📝 ${request.reason}`);
   }
   lines.push('');
-  lines.push('> 👇 点击下方按钮确认是否允许执行');
+  lines.push('> 👇 点击下方按钮确认；没有按钮时回复「同意」或「拒绝」');
   return lines.join('\n');
 }
 

@@ -1,8 +1,12 @@
 /**
- * MemoryStore — 按会话持久化「长期记忆 + 关系状态」
+ * MemoryStore — 持久化「人物画像 + 会话记忆」
+ *
+ * 两层结构：
+ *   - people：按发送者 id（QQ 号 / openid）存的人物画像，跨群与私聊共享
+ *   - chats：按会话存的关系统计与旧版要点，只属于当前群/私聊
  *
  * 存储路径：~/.dsh-qqbot/memory.json（与会话历史独立，/new 与重启都不清除）
- * key 与 SessionManager 的 sessionKey 同构：qqbot:${appId}:${scope}:${peerId}
+ * chat key 与 SessionManager 的 sessionKey 同构：qqbot:${appId}:${scope}:${peerId}
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -33,9 +37,26 @@ export interface ChatMemory {
   notes: MemoryNote[];
 }
 
+/**
+ * 单个人物画像（跨会话共享）。
+ *
+ * key 是发送者 id（OneBot 下就是 QQ 号，官方机器人下是 openid），
+ * 因此同一个人在私聊和所有群里共用同一份记忆。
+ */
+export interface PersonMemory {
+  senderId: string;
+  /** 最近一次看到的昵称（可能变化） */
+  senderName?: string;
+  firstSeenAt: number;
+  lastSeenAt: number;
+  messageCount: number;
+  notes: MemoryNote[];
+}
+
 interface MemoryFile {
-  version: 1;
+  version: 2;
   chats: Record<string, ChatMemory>;
+  people: Record<string, PersonMemory>;
 }
 
 /** 单个记忆文本的最大长度 */
@@ -43,6 +64,7 @@ export const MAX_NOTE_TEXT = 200;
 
 export class MemoryStore {
   private readonly chats = new Map<string, ChatMemory>();
+  private readonly people = new Map<string, PersonMemory>();
   private readonly filePath: string;
   private readonly debugLog?: (msg: string) => void;
 
@@ -140,6 +162,88 @@ export class MemoryStore {
     return deleted;
   }
 
+  // ── 人物画像（跨群/私聊共享） ──
+
+  getPerson(senderId: string): PersonMemory | undefined {
+    return this.people.get(senderId);
+  }
+
+  /**
+   * 记录一次与某个人的互动：累加消息数、刷新昵称与末次时间。
+   * 与会话无关，因此在任何群或私聊里说话都会累积到同一份画像。
+   */
+  recordPersonInteraction(
+    senderId: string,
+    senderName?: string,
+    at = Date.now(),
+  ): PersonMemory {
+    let record = this.people.get(senderId);
+    if (record === undefined) {
+      record = {
+        senderId,
+        ...(senderName !== undefined && senderName !== '' ? { senderName } : {}),
+        firstSeenAt: at,
+        lastSeenAt: at,
+        messageCount: 0,
+        notes: [],
+      };
+      this.people.set(senderId, record);
+    }
+    record.lastSeenAt = at;
+    record.messageCount += 1;
+    if (senderName !== undefined && senderName !== '') record.senderName = senderName;
+    this.write();
+    return record;
+  }
+
+  /** 追加一条人物画像要点；内容为空或重复时返回 undefined */
+  addPersonNote(
+    senderId: string,
+    text: string,
+    source: MemoryNote['source'],
+    maxNotes: number,
+  ): MemoryNote | undefined {
+    const normalized = normalizeNote(text);
+    if (normalized === '') return undefined;
+
+    let record = this.people.get(senderId);
+    if (record === undefined) {
+      const now = Date.now();
+      record = { senderId, firstSeenAt: now, lastSeenAt: now, messageCount: 0, notes: [] };
+      this.people.set(senderId, record);
+    }
+    const exists = record.notes.some((n) => normalizeNote(n.text).toLowerCase() === normalized.toLowerCase());
+    if (exists) return undefined;
+
+    const note: MemoryNote = { text: normalized.slice(0, MAX_NOTE_TEXT), at: Date.now(), source };
+    record.notes.push(note);
+    const limit = Math.max(1, maxNotes);
+    if (record.notes.length > limit) {
+      record.notes.splice(0, record.notes.length - limit);
+    }
+    this.write();
+    return note;
+  }
+
+  /** 删除某人画像的第 index 条；越界返回 false */
+  removePersonNote(senderId: string, index: number): boolean {
+    const record = this.people.get(senderId);
+    if (record === undefined || index < 0 || index >= record.notes.length) return false;
+    record.notes.splice(index, 1);
+    this.write();
+    return true;
+  }
+
+  /** 清空某人画像的要点（保留关系统计）；返回删除条数 */
+  clearPersonNotes(senderId: string): number {
+    const record = this.people.get(senderId);
+    if (record === undefined || record.notes.length === 0) return 0;
+    const count = record.notes.length;
+    record.notes = [];
+    this.write();
+    return count;
+  }
+
   private ensureRecord(key: string, scope: ChatScope, peerId: string): ChatMemory {
     let record = this.chats.get(key);
     if (record !== undefined) return record;
@@ -153,17 +257,32 @@ export class MemoryStore {
     try {
       if (!existsSync(this.filePath)) return;
       const data = JSON.parse(readFileSync(this.filePath, 'utf8')) as Partial<MemoryFile>;
-      if (!data.chats || typeof data.chats !== 'object') return;
-      for (const [key, value] of Object.entries(data.chats)) {
-        if (!isChatMemory(value)) continue;
-        this.chats.set(key, {
-          scope: value.scope,
-          peerId: value.peerId,
-          firstSeenAt: value.firstSeenAt,
-          lastSeenAt: value.lastSeenAt,
-          messageCount: value.messageCount,
-          notes: value.notes.filter(isMemoryNote),
-        });
+      if (data.chats && typeof data.chats === 'object') {
+        for (const [key, value] of Object.entries(data.chats)) {
+          if (!isChatMemory(value)) continue;
+          this.chats.set(key, {
+            scope: value.scope,
+            peerId: value.peerId,
+            firstSeenAt: value.firstSeenAt,
+            lastSeenAt: value.lastSeenAt,
+            messageCount: value.messageCount,
+            notes: value.notes.filter(isMemoryNote),
+          });
+        }
+      }
+      // v1 文件没有 people 字段：正常跳过，旧会话记忆仍保留
+      if (data.people && typeof data.people === 'object') {
+        for (const [key, value] of Object.entries(data.people)) {
+          if (!isPersonMemory(value)) continue;
+          this.people.set(key, {
+            senderId: value.senderId,
+            ...(typeof value.senderName === 'string' ? { senderName: value.senderName } : {}),
+            firstSeenAt: value.firstSeenAt,
+            lastSeenAt: value.lastSeenAt,
+            messageCount: value.messageCount,
+            notes: value.notes.filter(isMemoryNote),
+          });
+        }
       }
     } catch (err) {
       this.debugLog?.(`loadMemory failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -173,7 +292,11 @@ export class MemoryStore {
   private write(): void {
     try {
       mkdirSync(dirname(this.filePath), { recursive: true });
-      const data: MemoryFile = { version: 1, chats: Object.fromEntries(this.chats.entries()) };
+      const data: MemoryFile = {
+        version: 2,
+        chats: Object.fromEntries(this.chats.entries()),
+        people: Object.fromEntries(this.people.entries()),
+      };
       writeFileSync(this.filePath, JSON.stringify(data, null, 2), 'utf8');
     } catch (err) {
       this.debugLog?.(`writeMemory failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -203,6 +326,16 @@ function isChatMemory(value: unknown): value is ChatMemory {
   const record = value as Partial<ChatMemory>;
   return (record.scope === 'c2c' || record.scope === 'group')
     && typeof record.peerId === 'string'
+    && typeof record.firstSeenAt === 'number'
+    && typeof record.lastSeenAt === 'number'
+    && typeof record.messageCount === 'number'
+    && Array.isArray(record.notes);
+}
+
+function isPersonMemory(value: unknown): value is PersonMemory {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Partial<PersonMemory>;
+  return typeof record.senderId === 'string'
     && typeof record.firstSeenAt === 'number'
     && typeof record.lastSeenAt === 'number'
     && typeof record.messageCount === 'number'

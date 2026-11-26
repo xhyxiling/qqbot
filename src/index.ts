@@ -43,6 +43,34 @@ export async function apply(ctx: Context, config: ImQQBotConfig): Promise<void> 
   const agents = (ctx as unknown as Record<string, unknown>).agents as DshAgentRegistry;
   const logger: Logger = ((ctx as unknown as Record<string, unknown>).logger as Logger) ?? console;
 
+  // ── OneBot / 双后端：普通 QQ 号不走开放平台扫码绑定，但保留设置面板路由 ──
+  if (config.backend === 'onebot' || config.backend === 'both') {
+    const envAppId = resolveEnv(config.appId, 'QQBOT_APPID');
+    const envSecret = resolveEnv(config.appSecret, 'QQBOT_SECRET');
+    const officialReady = envAppId !== '' && envSecret !== '';
+    const onebotAppId = config.backend === 'onebot' && config.appId.trim() !== ''
+      ? config.appId.trim()
+      : `onebot-${config.onebot.selfId.trim() !== '' ? config.onebot.selfId.trim() : 'default'}`;
+
+    const resolvedConfig: ImQQBotConfig = {
+      ...config,
+      appId: officialReady ? envAppId : onebotAppId,
+      appSecret: envSecret,
+    };
+    if (config.backend === 'both' && !officialReady) {
+      logger.warn('im-qqbot: backend=both 但缺少官方机器人凭据，只启动普通 QQ 号通道');
+    }
+
+    // 必须注册：否则切到普通 QQ 号后就无法在面板里改回官方模式
+    registerBoundCredentialRoutes(
+      ctx, logger, resolvedConfig.appId, { ...resolvedConfig },
+      () => listHostToolNames(ctx),
+      (query) => listPersonaProfileViews(resolvedConfig, query),
+    );
+    await bootstrapGateway(ctx, agents, resolvedConfig, logger);
+    return;
+  }
+
   let appId = resolveEnv(config.appId, 'QQBOT_APPID');
   let appSecret = resolveEnv(config.appSecret, 'QQBOT_SECRET');
 

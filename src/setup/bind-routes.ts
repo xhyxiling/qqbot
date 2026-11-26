@@ -59,28 +59,42 @@ import {
 import {
   BIND_CONFIG_PATH,
   BIND_MANUAL_PATH,
+  BIND_NAPCAT_PATH,
   BIND_PERSONAS_PATH,
   BIND_REFRESH_PATH,
   BIND_STATE_PATH,
   BIND_UNBIND_PATH,
   BIND_UPDATE_PATH,
   type BindStateWire,
+  type NapcatAction,
+  type NapcatActionResponse,
+  type NapcatStateWire,
   type PersonaProfileQuery,
   type PersonaProfilesResponse,
   type UpdateInstallWire,
 } from '../shared/bind-protocol.ts';
+import { getNapcatManager } from '../onebot/napcat.ts';
 
 // 协议单一来源：shared/bind-protocol.ts（类型 + 路径常量，客户端共用）
 export {
   BIND_CONFIG_PATH,
   BIND_MANUAL_PATH,
+  BIND_NAPCAT_PATH,
   BIND_PERSONAS_PATH,
   BIND_REFRESH_PATH,
   BIND_STATE_PATH,
   BIND_UNBIND_PATH,
   BIND_UPDATE_PATH,
 };
-export type { BindStateWire, PersonaProfileQuery, PersonaProfilesResponse, UpdateInstallWire };
+export type {
+  BindStateWire,
+  NapcatAction,
+  NapcatActionResponse,
+  NapcatStateWire,
+  PersonaProfileQuery,
+  PersonaProfilesResponse,
+  UpdateInstallWire,
+};
 
 /** dsh-host-webserver 的具名路由注册形状（局部投影，避免硬依赖） */
 export interface WebRoute {
@@ -166,10 +180,16 @@ export interface BindRoutesOptions {
    * 缺省只用 git / registry 检查，更新仅返回手动命令。
    */
   update?: UpdateRouteHooks;
+  /**
+   * NapCat 托管用的插件配置（读 onebot.* 的地址 / token / QQ 号）。
+   * 缺省时按空配置处理（默认 3000/3001、空 token）。
+   */
+  napcatConfig?: () => Record<string, unknown> | undefined;
 }
 
 /** 可经 UI 编辑的配置键（白名单：只收用户必要的字段，其余走 patch/env） */
 const EDITABLE_CONFIG_KEYS = new Set([
+  'backend', 'onebot',
   'requireMention', 'streaming', 'replySplitMode', 'replySplitIntervalMs',
   'showToolResults', 'debug',
   'provider', 'model', 'preset',
@@ -185,6 +205,13 @@ const EDITABLE_CONFIG_KEYS = new Set([
 
 /** 白名单键的子 Schema（服务端校验：客户端校验仅为体验，安全边界在宿主） */
 const EDITABLE_CONFIG_SCHEMAS: Record<string, (value: unknown) => unknown> = {
+  backend: (v) => {
+    if (v !== 'official' && v !== 'onebot' && v !== 'both') {
+      throw new TypeError('backend 必须是 official / onebot / both');
+    }
+    return v;
+  },
+  onebot: (v) => onebotSchema(v),
   requireMention: (v) => booleanSchema(v, 'requireMention'),
   streaming: (v) => booleanSchema(v, 'streaming'),
   replySplitMode: (v) => splitModeSchema(v),
@@ -208,6 +235,23 @@ const EDITABLE_CONFIG_SCHEMAS: Record<string, (value: unknown) => unknown> = {
 function booleanSchema(value: unknown, name: string): boolean {
   if (typeof value !== 'boolean') throw new TypeError(`${name} 必须是布尔值`);
   return value;
+}
+
+/** OneBot 连接配置校验：四个字段均为字符串，未知字段丢弃 */
+function onebotSchema(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new TypeError('onebot 必须是对象');
+  }
+  const raw = value as Record<string, unknown>;
+  const out: Record<string, string> = {};
+  for (const key of ['httpUrl', 'wsUrl', 'accessToken', 'selfId'] as const) {
+    const field = raw[key];
+    if (field === undefined) continue;
+    if (typeof field !== 'string') throw new TypeError(`onebot.${key} 必须是字符串`);
+    if (field.length > 512) throw new TypeError(`onebot.${key} 过长`);
+    out[key] = field.trim();
+  }
+  return out;
 }
 
 function stringSchema(name: string): (value: unknown) => unknown {
@@ -1058,6 +1102,9 @@ const MAX_CONFIG_BODY_BYTES = 512 * 1024;
 /** 更新请求体上限（只含 `{ action: 'check' | 'update' }`） */
 const MAX_UPDATE_BODY_BYTES = 4096;
 
+/** NapCat 托管请求体上限（只含 `{ action }`） */
+const MAX_NAPCAT_BODY_BYTES = 4096;
+
 /** 线上回显：剔除 profileDir（服务端内部字段，只在宿主侧执行更新时使用） */
 function toInstallWire(info: InstallationInfo): UpdateInstallWire {
   return {
@@ -1146,10 +1193,16 @@ export function registerBindRoutes(
     webServer.register({
       kind: 'exact',
       path: BIND_PERSONAS_PATH,
-      handler: (req, res) => handlePersonas(req, res, options),
+      handler: (req, res) => { handlePersonas(req, res, options); },
+    }),
+    webServer.register({
+      kind: 'exact',
+      path: BIND_NAPCAT_PATH,
+      handler: (req, res) => handleNapcat(req, res, options, logger),
     }),
   ];
   logger.info(`im-qqbot: 端内绑定页已就绪: ${BIND_STATE_PATH}`);
+  logger.info('im-qqbot: NapCat 托管接口已就绪');
   return () => { for (const dispose of disposers) dispose(); };
 }
 
@@ -1461,6 +1514,91 @@ function handlePersonas(
       profiles: [],
       total: 0,
       error: `读取群友人格档案失败：${err instanceof Error ? err.message : String(err)}`,
+    });
+  }
+}
+
+/**
+ * NapCat 托管（设置面板卡片）：
+ * - GET：探测当前状态
+ * - POST `{ action: 'install' | 'start' | 'stop' | 'refresh' }`
+ *
+ * 业务失败统一 200 + `{ ok:false, state, error }`：面板据 state 收敛界面，
+ * 避免把错误码误判成路由缺失。
+ */
+async function handleNapcat(
+  req: IncomingMessage,
+  res: ServerResponse,
+  options: BindRoutesOptions,
+  logger: Logger,
+): Promise<void> {
+  if (!trusted(req)) {
+    sendJson(res, 403, { ok: false, error: 'forbidden' });
+    return;
+  }
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    sendJson(res, 405, { ok: false, error: 'method not allowed' });
+    return;
+  }
+
+  const manager = getNapcatManager(options.napcatConfig?.(), logger);
+
+  if (req.method === 'GET') {
+    const state = await manager.state();
+    sendJson(res, 200, { ok: true, state });
+    return;
+  }
+
+  let action: NapcatAction;
+  try {
+    const body = await readJsonBody(req, MAX_NAPCAT_BODY_BYTES);
+    const raw = typeof body === 'object' && body !== null
+      ? (body as Record<string, unknown>).action
+      : undefined;
+    if (raw !== 'install' && raw !== 'start' && raw !== 'stop' && raw !== 'refresh') {
+      throw new Error('action 必须是 install / start / stop / refresh');
+    }
+    action = raw;
+  } catch (err) {
+    const state = await manager.state();
+    sendJson(res, 200, {
+      ok: false,
+      state,
+      error: `无效的 NapCat 请求：${err instanceof Error ? err.message : String(err)}`,
+    });
+    return;
+  }
+
+  try {
+    // 安装要下 100–200MB：先返回 installing 状态，让面板轮询进度，
+    // 不把 HTTP 连接挂住几分钟
+    if (action === 'install') {
+      void manager.install().catch((err: unknown) => {
+        logger.warn(`im-qqbot: NapCat 安装异常: ${err instanceof Error ? err.message : String(err)}`);
+      });
+      const state = await manager.state();
+      sendJson(res, 200, { ok: true, state } satisfies NapcatActionResponse);
+      return;
+    }
+
+    const state = action === 'start'
+      ? await manager.start()
+      : action === 'stop'
+        ? await manager.stop()
+        : await manager.state();
+    const response: NapcatActionResponse = {
+      ok: state.phase !== 'error',
+      state,
+      ...(state.message !== undefined ? { message: state.message } : {}),
+      ...(state.phase === 'error' && state.message !== undefined ? { error: state.message } : {}),
+    };
+    sendJson(res, 200, response);
+  } catch (err) {
+    const state = await manager.state();
+    sendJson(res, 200, {
+      ok: false,
+      state,
+      error: `NapCat 操作失败：${err instanceof Error ? err.message : String(err)}`,
     });
   }
 }

@@ -226,7 +226,32 @@ export interface PersonaPreset {
   expressions?: ExpressionsConfig;
 }
 
+/**
+ * OneBot 11 连接配置（普通 QQ 账号，需自行运行 NapCat / LLOneBot 等实现）。
+ *
+ * 正向 WebSocket 收事件，HTTP 调 API，两者共用 accessToken（NapCat 默认留空）。
+ */
+export interface OneBotConfig {
+  /** HTTP API 地址（如 http://127.0.0.1:3000） */
+  httpUrl: string;
+  /** 正向 WebSocket 地址（如 ws://127.0.0.1:3001） */
+  wsUrl: string;
+  /** 访问令牌（NapCat 未配置时留空） */
+  accessToken: string;
+  /** 机器人 QQ 号（留空则启动时从 get_login_info 读取） */
+  selfId: string;
+}
+
 export interface ImQQBotConfig {
+  /**
+   * 传输后端：
+   * - official = 仅 QQ 开放平台机器人
+   * - onebot = 仅普通 QQ 账号（OneBot 11）
+   * - both = 两套同时在线（会话按通道隔离发送）
+   */
+  backend: 'official' | 'onebot' | 'both';
+  /** OneBot 11 连接配置（backend=onebot 时生效） */
+  onebot: OneBotConfig;
   /** QQ Bot AppID */
   appId: string;
   /** QQ Bot AppSecret */
@@ -393,6 +418,23 @@ export const PersonaPresetSchema: Schema<PersonaPreset> = Schema.object({
 });
 
 export const ConfigSchema: Schema<ImQQBotConfig> = Schema.object({
+  backend: Schema.union(['official', 'onebot', 'both']).default('official')
+    .description('传输后端：official=QQ 开放平台机器人；onebot=普通 QQ 账号（OneBot 11）；both=两者同时在线'),
+  onebot: Schema.object({
+    httpUrl: Schema.string().default('http://127.0.0.1:3000')
+      .description('OneBot HTTP API 地址（如 http://127.0.0.1:3000）'),
+    wsUrl: Schema.string().default('ws://127.0.0.1:3001')
+      .description('OneBot 正向 WebSocket 地址（如 ws://127.0.0.1:3001）'),
+    accessToken: Schema.string().default('')
+      .description('OneBot access_token（NapCat/LLOneBot 未配置时留空）'),
+    selfId: Schema.string().default('')
+      .description('机器人 QQ 号（留空则启动时自动读取）'),
+  }).default({
+    httpUrl: 'http://127.0.0.1:3000',
+    wsUrl: 'ws://127.0.0.1:3001',
+    accessToken: '',
+    selfId: '',
+  }).description('OneBot 11 连接配置（backend=onebot 时生效）'),
   appId: Schema.string().default('').description('QQ 机器人 AppID'),
   appSecret: Schema.string().default('').description('QQ 机器人 AppSecret'),
   provider: Schema.string().description('LLM provider name'),

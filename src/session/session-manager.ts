@@ -34,12 +34,18 @@ import {
   resolveToolBinding,
   type ToolsRestrictServiceLike,
 } from '../personas/persona-tools.ts';
-import { DEFAULT_TOOL_ALLOWLIST, STICKER_TOOL_NAMES } from '../shared/tool-catalog.ts';
+import { DEFAULT_TOOL_ALLOWLIST, STICKER_TOOL_NAMES, CONTROL_TOOL_NAME } from '../shared/tool-catalog.ts';
 import type { ModelRoute, ModelEntry } from '../model/types.ts';
 import { buildIdentityPromptSection } from '../identity/role.ts';
-import { MemoryStore, type ChatMemory, type MemoryNote } from '../memory/memory-store.ts';
+import {
+  MemoryStore,
+  type ChatMemory,
+  type MemoryNote,
+  type PersonMemory,
+} from '../memory/memory-store.ts';
 import {
   buildMemoryPromptSection,
+  buildPersonMemoryPromptSection,
   extractMemoryFacts,
 } from '../memory/memory-prompt.ts';
 import { IdleEvictor } from './idle-evictor.ts';
@@ -47,8 +53,10 @@ import { resolveActiveVoiceSettings } from '../voice/voice-config.ts';
 import { buildVoiceOptions } from '../voice/voice-presets.ts';
 import { buildVoicePromptSection } from '../voice/voice-prompt.ts';
 import { VOICE_TOOL_NAME } from '../voice/voice-tool.ts';
+import { DESCRIBE_IMAGE_TOOL_NAME } from '../media/vision-tool.ts';
 import { buildStickerPromptSection } from '../sticker/prompt.ts';
 import { getActiveStickerEngine } from '../sticker/index.ts';
+import { buildControlPromptSection } from '../features/control-prompt.ts';
 import type { QuestionChannel } from '../features/question-channel.ts';
 import type { ApprovalChannel } from '../features/approval-channel.ts';
 import type {
@@ -82,9 +90,6 @@ interface PromptSection {
   order: number;
   text: string;
 }
-
-/** 群聊记忆 note 无昵称时的说话人短标识长度（openid 前 N 位） */
-const SENDER_SHORT_ID_LEN = 8;
 
 /** system-prompt/assemble waterfall 的 context 最小结构 */
 interface AssembleContext {
@@ -169,10 +174,10 @@ export class SessionManager {
   }
 
   /**
-   * 通过 system-prompt/assemble waterfall 注入全局提示词与当前会话人格。
+   * 通过 system-prompt/assemble waterfall 注入全局提示词与人格。
    *
-   * 该事件在每次 turn 构建 request 时触发；此处按会话解析出生效人格
-   * （per-chat 覆盖 > config.defaultPersona），叠加全局提示词 section。
+   * 该事件在每次 turn 构建 request 时触发；人格是全局的（全局覆盖 > config.defaultPersona），
+   * 记忆分「人物画像（跨会话）」与「本会话关系」两层，叠加全局提示词 section。
    * 会话尚未建立（首次 assemble）或两者都未配置时原样返回，不做改动。
    */
   private registerScopePromptInjection(): void {
@@ -197,10 +202,28 @@ export class SessionManager {
       // 身份说明夹在全局提示词与人格之间（order 82）：人格只写称呼与态度，
       // 不再写死 openid；标签含义统一由这里解释。按 order 插入，不依赖宿主排序。
       const identitySection = buildIdentityPromptSection(this.config.identity);
+      // 看图说明（order 86.5）：视觉启用时才有意义。聊天里图片只以本地路径
+      // 形式出现（当前消息、引用、群历史都可能带），必须明确告诉模型「路径
+      // 不是图，要看就调工具」，否则它只会说看不到。
+      const visionSection: PromptSection | undefined = this.config.vision?.enabled === true
+        ? {
+          name: 'qqbot:vision',
+          order: 86.5,
+          text: '【看图】聊天里出现 `Image: <本地路径>`（当前消息、引用消息、群历史里都可能有）说明对方发过图，'
+            + '但你手里只有路径。需要知道图里是什么就调用 qqbot_describe_image，把该路径作为 image 参数；'
+            + '视频同理用该路径。不要直接回复「看不到」「只有一张图」——先看再说。',
+        }
+        : undefined;
       // 记忆与关系状态（order 87）排在人格之后：模型先知道「自己是谁」，
       // 再知道「对面是谁、聊过什么」，避免关系描述盖过人格语气。
       const memorySection = buildMemoryPromptSection(
         this.memoryStore.get(this.sessionKey(record.scope, record.peerId)),
+        this.config.memory,
+      );
+      // 人物画像（order 87，插在会话记忆之前）：画像按发送者 id 存，跨群/私聊共享；
+      // 会话记忆只描述「这个群/这段私聊」的关系，两者互补、不重复。
+      const personSection = buildPersonMemoryPromptSection(
+        this.memoryStore.getPerson(record.senderId),
         this.config.memory,
       );
       // 语音回复说明（order 88）：只有语音真正可用（voice.apiKey 非空且
@@ -225,9 +248,16 @@ export class SessionManager {
         total: allStickers.length,
         catalog: stickerCatalog,
       });
-      const ordered = [identitySection, memorySection, voiceSection, stickerSection].filter(
-        (section): section is PromptSection => section !== undefined,
-      );
+      const ordered = [
+        identitySection,
+        visionSection,
+        memorySection,
+        personSection,
+        voiceSection,
+        stickerSection,
+        // 管理操作说明（order 90）：主人用日常说话就能改人格/记忆/会话，不用手打斜杠
+        buildControlPromptSection(),
+      ].filter((section): section is PromptSection => section !== undefined);
       for (const section of ordered) {
         const insertAt = sections.findIndex((s) => s.order >= section.order);
         if (insertAt === -1) sections.push(section);
@@ -383,62 +413,59 @@ export class SessionManager {
   }
 
   /**
-   * 解析指定 peer 当前生效的人格 id。
+   * 解析当前生效的人格 id（全局，所有群/私聊统一）。
    *
-   * 优先级：per-chat 覆盖 > config.defaultPersona；两者都指向已删除的人格时返回 undefined。
+   * 优先级：全局覆盖 > config.defaultPersona；指向已删除的人格时返回 undefined。
+   * 参数保留是为了兼容既有调用点，不再参与解析。
    */
-  getEffectivePersonaId(scope: ChatScope, peerId: string): string | undefined {
-    const key = this.sessionKey(scope, peerId);
+  getEffectivePersonaId(_scope?: ChatScope, _peerId?: string): string | undefined {
     return resolvePersonaId(
       this.config.personas,
       this.config.defaultPersona,
-      this.modelResolver.getPersona(key),
+      this.modelResolver.getGlobalPersona(),
     );
   }
 
-  /** 解析指定 peer 当前生效的人格预设 */
-  getEffectivePersona(scope: ChatScope, peerId: string): PersonaPreset | undefined {
-    return findPersona(this.config.personas, this.getEffectivePersonaId(scope, peerId));
+  /** 解析当前生效的人格预设（全局） */
+  getEffectivePersona(_scope?: ChatScope, _peerId?: string): PersonaPreset | undefined {
+    return findPersona(this.config.personas, this.getEffectivePersonaId());
   }
 
-  /** 是否设置了 per-chat 人格覆盖（用于区分「跟随默认」与「手动指定」） */
-  hasPersonaOverride(scope: ChatScope, peerId: string): boolean {
-    return this.modelResolver.getPersona(this.sessionKey(scope, peerId)) !== undefined;
+  /** 是否设置了全局人格覆盖（用于区分「跟随默认」与「手动指定」） */
+  hasGlobalPersonaOverride(): boolean {
+    return this.modelResolver.getGlobalPersona() !== undefined;
   }
 
   /**
-   * 设置 per-chat 人格覆盖。
+   * 全局切换人格：所有群与私聊立刻统一生效。
    *
    * 人格通过 system-prompt/assemble 每次 turn 注入，无需重建会话，
-   * 下一条消息即时生效。
+   * 下一条消息即时生效；工具绑定需要刷新所有活跃会话。
    */
-  setPersonaOverride(scope: ChatScope, peerId: string, personaId: string): boolean {
+  setGlobalPersona(personaId: string): boolean {
     const persona = this.findPersonaById(personaId);
     if (!persona) return false;
-    const key = this.sessionKey(scope, peerId);
-    this.modelResolver.setPersona(key, personaId);
-    this.logger.info(`persona switched: key=${key} → ${personaId} (next turn applies)`);
-    this.refreshToolBinding(scope, peerId);
+    this.modelResolver.setGlobalPersona(personaId);
+    this.logger.info(`global persona switched → ${personaId} (next turn applies)`);
+    this.refreshAllToolBindings();
     return true;
   }
 
-  /** 清除 per-chat 人格覆盖，回到 config.defaultPersona */
-  clearPersonaOverride(scope: ChatScope, peerId: string): boolean {
-    const key = this.sessionKey(scope, peerId);
-    const cleared = this.modelResolver.clearPersona(key);
+  /** 清除全局人格覆盖，回到 config.defaultPersona */
+  clearGlobalPersona(): boolean {
+    const cleared = this.modelResolver.clearGlobalPersona();
     if (cleared) {
-      this.logger.info(`persona override cleared: key=${key}`);
-      this.refreshToolBinding(scope, peerId);
+      this.logger.info('global persona override cleared');
+      this.refreshAllToolBindings();
     }
     return cleared;
   }
 
-  /** 关闭当前会话的人格（写入哨兵覆盖，不影响其他会话与默认配置） */
-  disablePersona(scope: ChatScope, peerId: string): void {
-    const key = this.sessionKey(scope, peerId);
-    this.modelResolver.setPersona(key, PERSONA_OFF);
-    this.logger.info(`persona disabled: key=${key} (next turn applies)`);
-    this.refreshToolBinding(scope, peerId);
+  /** 全局关闭人格（写入哨兵覆盖，所有会话一起关闭） */
+  disableGlobalPersona(): void {
+    this.modelResolver.setGlobalPersona(PERSONA_OFF);
+    this.logger.info('global persona disabled (next turn applies)');
+    this.refreshAllToolBindings();
   }
 
   // ── 人格工具绑定（/tools） ──
@@ -500,10 +527,19 @@ export class SessionManager {
     if (resolveActiveVoiceSettings(this.config.voice) !== undefined && !whitelist.includes(VOICE_TOOL_NAME)) {
       whitelist.push(VOICE_TOOL_NAME);
     }
+    // 看图属于「感知」而不是可选能力：始终放行 qqbot_describe_image，
+    // 即使人格写了 `tools: []`——否则别人发图/表情包时模型只有路径没法看，
+    // 连对方发的是不是表情包都判断不了。工具未注册时该名字会被忽略，无副作用。
+    if (!whitelist.includes(DESCRIBE_IMAGE_TOOL_NAME)) {
+      whitelist.push(DESCRIBE_IMAGE_TOOL_NAME);
+    }
     // sticker 三工具也是消息投递能力：始终放行，不受 persona 白名单限制
     for (const name of STICKER_TOOL_NAMES) {
       if (!whitelist.includes(name)) whitelist.push(name);
     }
+    // 管理工具属于「机器人自身设置入口」：人格写 tools:[] 也不能把它关掉，
+    // 否则主人一旦切到封闭人格就再也换不回来了
+    if (!whitelist.includes(CONTROL_TOOL_NAME)) whitelist.push(CONTROL_TOOL_NAME);
     return { whitelist, blocked };
   }
 
@@ -588,10 +624,9 @@ export class SessionManager {
     record.toolRestriction = undefined;
   }
 
-  /** 人格切换后立即刷新工具绑定（没有活跃会话时留待创建时应用） */
-  private refreshToolBinding(scope: ChatScope, peerId: string): void {
-    const record = this.sessions.get(this.sessionKey(scope, peerId));
-    if (record) this.applyToolBinding(record);
+  /** 人格切换后立即刷新所有活跃会话的工具绑定（无会话时留待创建时应用） */
+  private refreshAllToolBindings(): void {
+    for (const record of this.sessions.values()) this.applyToolBinding(record);
   }
 
   // ── 记忆与关系状态（/memory） ──
@@ -602,7 +637,8 @@ export class SessionManager {
   }
 
   /**
-   * 记录一次用户互动：累加互动次数，并按需自动捕获自述要点。
+   * 记录一次用户互动：累加会话关系统计与「人物画像」互动次数，
+   * 并按需自动捕获自述要点（写入人物画像，跨群/私聊共享）。
    *
    * 记忆独立于会话历史：`/new` 只换上下文，记忆仍保留；重启后同样保留。
    */
@@ -616,24 +652,38 @@ export class SessionManager {
     if (!this.memoryEnabled) return;
     const key = this.sessionKey(scope, peerId);
     this.memoryStore.recordInteraction(key, scope, peerId);
+    // 画像按发送者 id 累积：同一个人在私聊/任何群说话都记到同一份画像
+    this.memoryStore.recordPersonInteraction(senderId, senderName);
     if (!this.config.memory.autoCapture) return;
 
     const facts = extractMemoryFacts(text);
     if (facts.length === 0) return;
-    // 群聊同一会话有多个说话人：note 带说话人前缀，避免把 A 的自述算到 B 头上
-    const prefix = scope === 'group'
-      ? `[${senderName ?? senderId.slice(0, SENDER_SHORT_ID_LEN)}] `
-      : '';
     for (const fact of facts) {
-      this.memoryStore.addNote(
-        key,
-        scope,
-        peerId,
-        `${prefix}${fact}`,
-        'auto',
-        this.config.memory.maxNotes,
-      );
+      this.memoryStore.addPersonNote(senderId, fact, 'auto', this.config.memory.maxNotes);
     }
+  }
+
+  /** 读取某人的跨会话画像 */
+  getPersonMemory(senderId: string): PersonMemory | undefined {
+    return this.memoryStore.getPerson(senderId);
+  }
+
+  /** 手动给某人画像加一条要点；记忆关闭或内容重复时返回 undefined */
+  addPersonNote(senderId: string, text: string): MemoryNote | undefined {
+    if (!this.memoryEnabled) return undefined;
+    return this.memoryStore.addPersonNote(senderId, text, 'manual', this.config.memory.maxNotes);
+  }
+
+  /** 删除某人画像的第 index 条要点（0-based） */
+  removePersonNote(senderId: string, index: number): boolean {
+    if (!this.memoryEnabled) return false;
+    return this.memoryStore.removePersonNote(senderId, index);
+  }
+
+  /** 清空某人画像的要点（保留关系统计）；返回删除条数 */
+  clearPersonNotes(senderId: string): number {
+    if (!this.memoryEnabled) return 0;
+    return this.memoryStore.clearPersonNotes(senderId);
   }
 
   /** 手动添加一条要点记忆；记忆关闭或内容重复时返回 undefined */
