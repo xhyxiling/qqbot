@@ -815,12 +815,21 @@ export class NapcatManager {
       child.unref();
       if (typeof child.pid === 'number') writeFileSync(this.pidPath, String(child.pid), 'utf8');
     } else {
-      // 宿主非管理员 —— PowerShell 提权启动，-PassThru 拿回新 cmd 的 pid
-      // 新进程会弹出可见的 UAC 窗口；原始进程立即退出，不阻塞
+      // 宿主非管理员 —— 通过 .NET ProcessStartInfo 提权 + 隐藏窗口
+      // PowerShell Start-Process -Verb RunAs 不接受 WindowStyle 参数，
+      // 改用 ProcessStartInfo + Verb=runas + WindowStyle=Hidden 可以
+      // 在 UAC 通过后完全隐藏 cmd 窗口，用户看不到也不会误关。
+      const dir = dirname(launcher).replace(/'/g, "''");
+      const escapedLauncher = launcher.replace(/'/g, "''");
       const ps =
-        `$p = Start-Process -FilePath '${launcher.replace(/'/g, "''")}' ` +
-        `-WorkingDirectory '${dirname(launcher).replace(/'/g, "''")}' ` +
-        `-Verb RunAs -PassThru; ` +
+        `$psi = New-Object System.Diagnostics.ProcessStartInfo; ` +
+        `$psi.FileName = 'cmd.exe'; ` +
+        `$psi.Arguments = '/c "' + '${escapedLauncher}' + '"'; ` +
+        `$psi.WorkingDirectory = '${dir}'; ` +
+        `$psi.Verb = 'runas'; ` +
+        `$psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden; ` +
+        `$psi.UseShellExecute = $true; ` +
+        `$p = [System.Diagnostics.Process]::Start($psi); ` +
         `$p.Id`;
       const out = execFileSync('powershell.exe', ['-NoProfile', '-Command', ps], {
         encoding: 'utf8',
@@ -830,8 +839,7 @@ export class NapcatManager {
       if (!Number.isNaN(pid) && pid > 0) {
         writeFileSync(this.pidPath, String(pid), 'utf8');
       }
-      // UAC 确认后新 cmd.exe 会写日志；这里先记一行
-      writeFileSync(logPath, `[${new Date().toISOString()}] spawnLauncher elevated pid=${pid}\n`, { flag: 'a' });
+      writeFileSync(logPath, `[${new Date().toISOString()}] spawnLauncher elevated(hidden) pid=${pid}\n`, { flag: 'a' });
     }
   }
 
