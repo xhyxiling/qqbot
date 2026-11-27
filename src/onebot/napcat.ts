@@ -769,13 +769,19 @@ export class NapcatManager {
 
   // ── 内部：启动 / 停止 ──
 
-  /** 是否以管理员身份运行（Windows only，其他平台返回 false） */
+  /**
+   * 是否以提升的管理员身份运行。
+   * Windows 的 UAC 会让用户同时属于 Administrators 组（S-1-5-32-544），
+   * 但普通进程的该组属性是 "deny only"（被禁用）。真正的管理员进程
+   * Mandatory Label 是 High Mandatory Level（S-1-16-12288），普通进程
+   * 是 Medium Mandatory Level（S-1-16-8192）。
+   */
   private isAdmin(): boolean {
     if (process.platform !== 'win32') return false;
     try {
-      // 用 whoami /groups 检查 Administrators 组是否启用（S-1-5-32-544）
       const stdout = execFileSync('whoami', ['/groups'], { encoding: 'utf8' });
-      return stdout.includes('S-1-5-32-544');
+      // High Mandatory Level 才是真正提权后的管理员进程
+      return stdout.includes('S-1-16-12288');
     } catch {
       return false;
     }
