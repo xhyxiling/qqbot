@@ -26,6 +26,8 @@ function makeConfig(): ImQQBotConfig {
     ],
     identity: { enabled: true, ownerOpenIds: ['owner1'], adminOpenIds: [], friendOpenIds: ['friend1'] },
     memory: { enabled: true, autoCapture: true, maxNotes: 20 },
+    backend: 'official',
+    onebot: { httpUrl: 'http://127.0.0.1:3000', wsUrl: 'ws://127.0.0.1:3001', accessToken: '', selfId: '' },
   } as unknown as ImQQBotConfig;
 }
 
@@ -62,6 +64,8 @@ function setup(record: SessionRecord) {
     getChatMemory: vi.fn(() => undefined),
     removePersonNote: vi.fn(() => true),
     clearPersonNotes: vi.fn(() => 1),
+    setBotName: vi.fn(),
+    setQqAccountName: vi.fn(),
   };
   let definition: { execute: (args: unknown, exec: { agent?: unknown }) => Promise<ControlResult> } | undefined;
   const tools = { register: (def: unknown) => { definition = def as typeof definition; } };
@@ -109,5 +113,22 @@ describe('qqbot_control', () => {
     const result = await definition.execute({ action: 'memory', args: 'add 我喜欢喝美式' }, { agent: {} });
     expect(manager.addPersonNote).toHaveBeenCalledWith('owner1', '我喜欢喝美式');
     expect(result.text).toContain('已记住');
+  });
+
+  it('rename_bot：只改机器人自称，不动 QQ 昵称', async () => {
+    const { definition, manager } = setup(makeRecord());
+    const result = await definition.execute({ action: 'rename_bot', args: '小泠' }, { agent: {} });
+    expect(result.ok).toBe(true);
+    expect(manager.setBotName).toHaveBeenCalledWith('小泠');
+    expect(manager.setQqAccountName).not.toHaveBeenCalled();
+    expect(result.text).toContain('小泠');
+  });
+
+  it('rename_qq 在官方通道：给出可转述的原因，不改任何记录', async () => {
+    const { definition, manager } = setup(makeRecord());
+    const result = await definition.execute({ action: 'rename_qq', args: '新昵称' }, { agent: {} });
+    expect(result.ok).toBe(false);
+    expect(result.text).toContain('官方');
+    expect(manager.setQqAccountName).not.toHaveBeenCalled();
   });
 });

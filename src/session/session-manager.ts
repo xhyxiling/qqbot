@@ -37,6 +37,7 @@ import {
 import { DEFAULT_TOOL_ALLOWLIST, STICKER_TOOL_NAMES, CONTROL_TOOL_NAME } from '../shared/tool-catalog.ts';
 import type { ModelRoute, ModelEntry } from '../model/types.ts';
 import { buildIdentityPromptSection } from '../identity/role.ts';
+import { buildNamesPromptSection, NamesStore, type BotNames } from '../identity/names-store.ts';
 import {
   MemoryStore,
   type ChatMemory,
@@ -130,6 +131,8 @@ export class SessionManager {
   private readonly modelResolver: ModelResolver;
   /** 长期记忆与关系状态（~/.dsh-qqbot/memory.json） */
   private readonly memoryStore: MemoryStore;
+  /** 机器人自称 / QQ 账号昵称（~/.dsh-qqbot/names.json） */
+  private readonly namesStore: NamesStore;
   private readonly ctx: Context;
   private readonly host: HostAdapter;
   private readonly agents: DshAgentRegistry;
@@ -154,6 +157,7 @@ export class SessionManager {
     this.logger.info(`host adapter capabilities: ${this.host.capabilities.join(', ')}`);
     this.modelResolver = new ModelResolver(ctx, config, logger);
     this.memoryStore = new MemoryStore({ debugLog: (msg) => logger.debug(msg) });
+    this.namesStore = new NamesStore(undefined, (msg) => logger.debug(msg));
 
     this.evictor = new IdleEvictor(
       this.sessions,
@@ -250,6 +254,7 @@ export class SessionManager {
       });
       const ordered = [
         identitySection,
+        buildNamesPromptSection(this.namesStore.get()),
         visionSection,
         memorySection,
         personSection,
@@ -666,6 +671,21 @@ export class SessionManager {
   /** 读取某人的跨会话画像 */
   getPersonMemory(senderId: string): PersonMemory | undefined {
     return this.memoryStore.getPerson(senderId);
+  }
+
+  /** 机器人自称 / QQ 账号昵称（两者独立） */
+  getBotNames(): BotNames {
+    return this.namesStore.get();
+  }
+
+  /** 设置机器人自称（只影响提示词，不改 QQ 资料）；name 传空串清除 */
+  setBotName(name: string): void {
+    this.namesStore.setBotName(name);
+  }
+
+  /** 记录 QQ 账号当前昵称（实际改资料由调用方完成）；name 传空串清除 */
+  setQqAccountName(name: string): void {
+    this.namesStore.setQqAccountName(name);
   }
 
   /** 手动给某人画像加一条要点；记忆关闭或内容重复时返回 undefined */

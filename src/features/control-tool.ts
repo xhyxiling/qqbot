@@ -20,6 +20,7 @@ import type { SessionManager } from '../session/index.ts';
 import type { DshAgent } from '../session/types.ts';
 import type { PersonaCommandServices } from '../commands/types.ts';
 import { buildCommandList } from '../commands/index.ts';
+import { sanitizeName } from '../identity/names-store.ts';
 
 /** 工具名 */
 export const CONTROL_TOOL_NAME = 'qqbot_control';
@@ -32,6 +33,8 @@ export const CONTROL_ACTIONS = [
   'compact',
   'model',
   'preset',
+  'rename_bot',
+  'rename_qq',
   'status',
   'tools',
   'whoami',
@@ -90,14 +93,55 @@ function commandNames(name: string | readonly string[]): string[] {
   return typeof name === 'string' ? [name] : [...name];
 }
 
+/**
+ * 调用 OneBot set_qq_profile 修改账号昵称。
+ *
+ * 只有 OneBot/NapCat 通道支持；官方正式机器人没有这个能力。
+ */
+async function setQqNickname(
+  config: ImQQBotConfig,
+  name: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const base = config.onebot.httpUrl.replace(/\/+$/, '');
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (config.onebot.accessToken !== '') {
+    headers.Authorization = `Bearer ${config.onebot.accessToken}`;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => { controller.abort(); }, 8000);
+  try {
+    const response = await fetch(`${base}/set_qq_profile`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ nickname: name }),
+      signal: controller.signal,
+    });
+    const body = await response.json().catch(() => ({})) as {
+      status?: string;
+      message?: string;
+    };
+    if (!response.ok || (body.status !== undefined && body.status !== 'ok')) {
+      return { ok: false, error: body.message ?? `HTTP ${response.status}` };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: `连不上 OneBot 接口（${err instanceof Error ? err.message : String(err)}）` };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const DESCRIPTION =
   'Owner/admin control channel for changing this bot\'s own settings through natural language. '
   + 'Call it when the owner or an admin asks you to switch persona ("换成猫娘人格", "用傲娇的语气"), '
   + 'remember/forget something about them ("记住我喜欢喝美式", "把我那条忘了"), start a new session '
-  + '("重新开始聊", "清空上下文"), compact history, switch model or preset, or check the bot status. '
+  + '("重新开始聊", "清空上下文"), compact history, switch model or preset, rename you or the QQ account, '
+  + 'or check the bot status. '
   + 'Never ask the user to type slash commands — just call this tool. '
   + '`args` is the command argument: persona id (or "default"/"off"), "add 内容"/"del 3"/"clear" for memory, '
-  + '"provider/model" or model id for model, preset id for preset. '
+  + '"provider/model" or model id for model, preset id for preset, the new name for rename_bot/rename_qq. '
+  + 'rename_bot only changes how you call yourself; rename_qq changes the QQ account profile nickname. '
+  + 'The two names are independent. '
   + 'Other users (friends/strangers) cannot use it; do not call it for them.';
 
 /**
@@ -132,7 +176,8 @@ export function registerControlTool(ctx: Context, options: ControlToolOptions): 
           description:
             'Argument passed to the action. persona: persona id / "default" / "off"; '
             + 'memory: "add 内容" | "del 序号" | "clear" | omitted to view; '
-            + 'model: "provider/model" or model id or "default"; preset: preset id or "reset".',
+            + 'model: "provider/model" or model id or "default"; preset: preset id or "reset"; '
+            + 'rename_bot / rename_qq: the new name.',
         },
       },
       required: ['action'],
@@ -151,6 +196,13 @@ export function registerControlTool(ctx: Context, options: ControlToolOptions): 
       render: (_args: unknown, value: unknown): ContentBlock[] => {
         const result = value as ControlResult;
         if (!result.ok) {
+          // 主人/管理员能收到具体原因（如通道不支持改昵称）；普通人拿到的 text 为空，按普通聊天接住
+          if (result.text.trim()) {
+            return [{
+              type: 'text',
+              text: `执行结果（用你的语气转述给用户，不要提工具/命令/系统/权限）：\n${stripCommandTags(result.text)}`,
+            }];
+          }
           return [{
             type: 'text',
             text: '（这一步用不了）把这句话当成普通聊天接住：用你的语气自然回应或轻轻岔开，'
@@ -195,6 +247,33 @@ export function registerControlTool(ctx: Context, options: ControlToolOptions): 
             ? '已安排在本轮回复后开启新会话（上下文清空，长期记忆保留）。'
             : '已安排在本轮回复后压缩上下文历史。',
         };
+      }
+
+      // 命名：机器人自称与 QQ 账号昵称相互独立，改一个不影响另一个
+      if (action === 'rename_bot' || action === 'rename_qq') {
+        const name = sanitizeName(arg);
+        if (name === '') {
+          return {
+            ok: false,
+            text: action === 'rename_bot' ? '要给机器人起什么名字？' : '要把 QQ 昵称改成什么？',
+          };
+        }
+        if (action === 'rename_bot') {
+          manager.setBotName(name);
+          logger.info(`im-qqbot: ${CONTROL_TOOL_NAME} 机器人改名为 ${name}`);
+          return { ok: true, text: `我的名字已经改成「${name}」了。` };
+        }
+        if (config.backend === 'official') {
+          return { ok: false, text: '当前走的是官方机器人通道，改不了 QQ 账号昵称。' };
+        }
+        const renamed = await setQqNickname(config, name);
+        if (!renamed.ok) {
+          logger.warn(`im-qqbot: ${CONTROL_TOOL_NAME} 改 QQ 昵称失败: ${renamed.error}`);
+          return { ok: false, text: `改 QQ 昵称没成功：${renamed.error}` };
+        }
+        manager.setQqAccountName(name);
+        logger.info(`im-qqbot: ${CONTROL_TOOL_NAME} QQ 账号昵称改为 ${name}`);
+        return { ok: true, text: `QQ 账号昵称已经改成「${name}」了。` };
       }
 
       const commandName = ACTION_COMMAND[action];
