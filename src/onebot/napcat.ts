@@ -79,8 +79,12 @@ export interface NapcatManagerOptions {
 
 const DEFAULT_HTTP_URL = 'http://127.0.0.1:3000';
 const DEFAULT_WS_URL = 'ws://127.0.0.1:3001';
-/** NapCat WebUI 固定端口（官方默认） */
-const WEBUI_URL = 'http://127.0.0.1:6099/webui';
+/** NapCat WebUI 候选地址（Shell/OneKey 用 6099/webui，QCE 版用 40653/qce） */
+const WEBUI_CANDIDATES = [
+  'http://127.0.0.1:6099/webui',
+  'http://127.0.0.1:40653/qce',
+  'http://127.0.0.1:40653',
+];
 const RELEASE_API = 'https://api.github.com/repos/NapNeko/NapCatQQ/releases/latest';
 const MANUAL_URL = 'https://github.com/NapNeko/NapCatQQ/releases';
 const WINDOWS_ONLY_MESSAGE = `NapCat 自动安装仅支持 Windows；macOS/Linux 请手动下载安装：${MANUAL_URL}`;
@@ -96,6 +100,8 @@ const ONEKEY_ZIP = 'NapCat.Shell.Windows.OneKey.zip';
 
 /** get_login_info 探测超时 */
 const LOGIN_PROBE_TIMEOUT_MS = 2000;
+/** WebUI 候选地址探测超时 */
+const WEBUI_PROBE_TIMEOUT_MS = 500;
 /** start() 后等待登录/运行态的最长时间与轮询间隔 */
 const START_POLL_TIMEOUT_MS = 30_000;
 const START_POLL_INTERVAL_MS = 1000;
@@ -186,7 +192,12 @@ export class NapcatManager {
 
   /** 探测当前状态（不产生副作用） */
   public async state(): Promise<NapcatState> {
-    const base = this.base('not_installed');
+    // 并行探测 OneBot 登录态和 WebUI 可达性，省一次 RTT
+    const [probe, webuiUrl] = await Promise.all([
+      this.probeLogin(),
+      this.probeWebui(),
+    ]);
+    const base = this.base('not_installed', webuiUrl);
     if (process.platform !== 'win32') {
       return { ...base, phase: 'unsupported', message: WINDOWS_ONLY_MESSAGE };
     }
@@ -205,7 +216,6 @@ export class NapcatManager {
     const launcher = this.findLauncher();
     // 先探测 OneBot 接口：外部 NapCat（不在托管目录）也可能正在跑，
     // 只要 HTTP 接口能通就算「运行中」，不能因为没找到启动脚本就报未安装。
-    const probe = await this.probeLogin();
     if (probe.running) {
       const external = launcher !== undefined && !this.isInsideInstallDir(launcher);
       // 只有托管启动过的进程（有 pid 文件且存活）才给「停止」，外部实例停不掉
@@ -234,7 +244,9 @@ export class NapcatManager {
         phase: 'login_required',
         launcher,
         ...(qqPath !== undefined ? { qqPath } : {}),
-        message: `NapCat 已启动，等待扫码登录：${WEBUI_URL}`,
+        message: webuiUrl !== undefined
+          ? `NapCat 已启动，等待扫码登录：${webuiUrl}`
+          : 'NapCat 已启动，等待扫码登录',
       };
     }
 
@@ -413,15 +425,35 @@ export class NapcatManager {
 
   // ── 内部：状态与探测 ──
 
-  private base(phase: NapcatPhase): NapcatState {
+  private base(phase: NapcatPhase, webuiUrl?: string): NapcatState {
     return {
       phase,
       platform: process.platform,
       installDir: this.installDir,
-      webuiUrl: WEBUI_URL,
+      webuiUrl: webuiUrl ?? '',
       httpUrl: this.env.httpUrl,
       loggedIn: false,
     };
+  }
+
+  /**
+   * 探测哪个 WebUI 候选地址可达（Shell/OneKey 版用 6099/webui，QCE 版用 40653/qce）。
+   * 全部超时返回空字符串（面板可降级不显示链接）。
+   */
+  private async probeWebui(): Promise<string | undefined> {
+    const results = await Promise.all(WEBUI_CANDIDATES.map(async (url) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => { controller.abort(); }, WEBUI_PROBE_TIMEOUT_MS);
+      try {
+        const res = await this.fetchImpl(url, { method: 'GET', signal: controller.signal });
+        return res.ok ? url : undefined;
+      } catch {
+        return undefined;
+      } finally {
+        clearTimeout(timer);
+      }
+    }));
+    return results.find((r): r is string => r !== undefined);
   }
 
   /** GET {httpUrl}/get_login_info（2s 超时；有 token 时带 Bearer） */
@@ -731,10 +763,10 @@ export class NapcatManager {
     let child;
     try {
       const stdio: StdioOptions = ['ignore', logFd, logFd];
-      // cmd.exe /c 只接受一个命令串（引号包裹整条），否则带空格路径会被拆解
-      // launcher.bat 的 %~1 是 QQ.exe 路径，不是 selfId —— selfId 已写入配置文件
-      const cmd = `"${launcher}"`;
-      child = this.spawnImpl('cmd.exe', ['/c', cmd], {
+      // 直接把 launcher 路径作为 /c 的参数，让 Node.js spawn 在 Windows 上
+      // 自动给带空格的路径加引号——手动加引号会被双层转义导致 cmd 找不到命令。
+      // launcher.bat 的 %~1 是 QQ.exe 路径，不要传 selfId（它已写入配置文件）。
+      child = this.spawnImpl('cmd.exe', ['/c', launcher], {
         // 外部安装的 launcher.bat 依赖自身目录里的相对路径
         cwd: dirname(launcher),
         detached: true,
