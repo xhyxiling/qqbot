@@ -731,8 +731,10 @@ export class NapcatManager {
     let child;
     try {
       const stdio: StdioOptions = ['ignore', logFd, logFd];
-      const args = ['/c', launcher, ...(this.env.selfId !== '' ? [this.env.selfId] : [])];
-      child = this.spawnImpl('cmd.exe', args, {
+      // cmd.exe /c 只接受一个命令串（引号包裹整条），否则带空格路径会被拆解
+      // launcher.bat 的 %~1 是 QQ.exe 路径，不是 selfId —— selfId 已写入配置文件
+      const cmd = `"${launcher}"`;
+      child = this.spawnImpl('cmd.exe', ['/c', cmd], {
         // 外部安装的 launcher.bat 依赖自身目录里的相对路径
         cwd: dirname(launcher),
         detached: true,
