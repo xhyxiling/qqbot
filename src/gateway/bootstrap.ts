@@ -13,7 +13,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import { SessionManager, type DshAgentRegistry } from '../session/index.ts';
 import type { ImQQBotConfig } from '../config.ts';
 import type { ChannelKind, Logger } from '../types.ts';
-import { createPersonaRuntime } from './persona-runtime.ts';
+import { createArchiveRuntime } from './archive-runtime.ts';
 import { createOfficialTransport } from './official.ts';
 import { bootstrapCommon } from './common.ts';
 import { MultiplexSender, type ChannelEndpoint } from './multiplex.ts';
@@ -63,23 +63,23 @@ export async function bootstrapGateway(
   logger.info(`im-qqbot: backend=${config.backend}${officialEnabled ? '' : '（官方通道未启用）'}`);
 
   const manager = new SessionManager(ctx, agents, baseConfig, logger);
-  const persona = createPersonaRuntime(ctx, baseConfig, manager, logger);
+  const archive = createArchiveRuntime(ctx, baseConfig, logger);
   // 长期记忆的 LLM 慢路径：拿到宿主 llm 服务后接管异步抽取
-  manager.attachMemoryLlm(persona.llm);
+  manager.attachMemoryLlm(archive.llm);
   // 主动发言前的模型判断：两人对话/话题封闭时不插话
-  manager.attachProactiveLlm(persona.llm);
+  manager.attachProactiveLlm(archive.llm);
 
   const endpoints = new Map<ChannelKind, ChannelEndpoint>();
   const transports: GatewayTransport[] = [];
 
   if (officialEnabled) {
-    const transport = createOfficialTransport({ config: officialConfig, manager, logger, persona });
+    const transport = createOfficialTransport({ config: officialConfig, manager, logger, archive });
     endpoints.set('official', { sender: transport.sender, mediaSender: transport.mediaSender });
     transports.push(transport);
   }
 
   if (wantsOneBot) {
-    const transport = createOneBotTransport({ config: onebotConfig, manager, logger, persona });
+    const transport = createOneBotTransport({ config: onebotConfig, manager, logger, archive });
     endpoints.set('onebot', { sender: transport.sender, mediaSender: transport.mediaSender });
     transports.push(transport);
   }
@@ -103,5 +103,5 @@ export async function bootstrapGateway(
     },
   };
 
-  await bootstrapCommon({ ctx, config: baseConfig, logger, manager, persona, transport });
+  await bootstrapCommon({ ctx, config: baseConfig, logger, manager, archive, transport });
 }

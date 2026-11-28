@@ -60,7 +60,6 @@ import {
   BIND_CONFIG_PATH,
   BIND_MANUAL_PATH,
   BIND_NAPCAT_PATH,
-  BIND_PERSONAS_PATH,
   BIND_REFRESH_PATH,
   BIND_STATE_PATH,
   BIND_UNBIND_PATH,
@@ -69,8 +68,6 @@ import {
   type NapcatAction,
   type NapcatActionResponse,
   type NapcatStateWire,
-  type PersonaProfileQuery,
-  type PersonaProfilesResponse,
   type UpdateInstallWire,
 } from '../shared/bind-protocol.ts';
 import { getNapcatManager } from '../onebot/napcat.ts';
@@ -80,7 +77,6 @@ export {
   BIND_CONFIG_PATH,
   BIND_MANUAL_PATH,
   BIND_NAPCAT_PATH,
-  BIND_PERSONAS_PATH,
   BIND_REFRESH_PATH,
   BIND_STATE_PATH,
   BIND_UNBIND_PATH,
@@ -91,8 +87,6 @@ export type {
   NapcatAction,
   NapcatActionResponse,
   NapcatStateWire,
-  PersonaProfileQuery,
-  PersonaProfilesResponse,
   UpdateInstallWire,
 };
 
@@ -166,11 +160,6 @@ export interface BindRoutesOptions {
    * 缺省或返回空数组时响应不带 `tools` 字段（老客户端兼容）。
    */
   availableTools?: () => string[];
-  /**
-   * 群友人格列表（设置面板「群友人格」页签）。
-   * 缺省时路由返回 `ok:false`（未启用/未接入），客户端展示空表。
-   */
-  listPersonaProfiles?: (query: PersonaProfileQuery) => PersonaProfilesResponse;
   /**
    * 配置写入处理（默认：最小合并写入 profile patch）。
    */
@@ -629,23 +618,18 @@ function identitySchema(value: unknown): {
 const MIN_MEMORY_NOTES = 1;
 const MAX_MEMORY_NOTES = 100;
 
-/** 人格档案每个会话的条数范围（与 config.ts 的 maxMessages 对齐） */
+/** 发言档案每个会话的条数范围（与 config.ts 的 maxMessages 对齐） */
 const MIN_ANALYSIS_MESSAGES = 20;
 const MAX_ANALYSIS_MESSAGES = 1000;
-/** 人格档案保留天数范围 */
+/** 发言档案保留天数范围 */
 const MIN_ANALYSIS_DAYS = 1;
 const MAX_ANALYSIS_DAYS = 365;
-/** 自动分析触发条数范围（与 config.ts / 面板一致） */
-const MIN_AUTO_ANALYZE_THRESHOLD = 5;
-const MAX_AUTO_ANALYZE_THRESHOLD = 200;
 
-/** 群聊人格档案：开关 + 条数 + 保留天数 + 自动分析 */
+/** 群友发言档案：开关 + 条数 + 保留天数 */
 function personaAnalysisSchema(value: unknown): {
   enabled: boolean;
   maxMessages: number;
   retentionDays: number;
-  autoAnalyze: boolean;
-  autoAnalyzeThreshold: number;
 } {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new TypeError('personaAnalysis 必须是对象');
@@ -653,9 +637,6 @@ function personaAnalysisSchema(value: unknown): {
   const record = value as Record<string, unknown>;
   if (record.enabled !== undefined && typeof record.enabled !== 'boolean') {
     throw new TypeError('personaAnalysis.enabled 必须是布尔值');
-  }
-  if (record.autoAnalyze !== undefined && typeof record.autoAnalyze !== 'boolean') {
-    throw new TypeError('personaAnalysis.autoAnalyze 必须是布尔值');
   }
 
   const readInteger = (
@@ -679,13 +660,6 @@ function personaAnalysisSchema(value: unknown): {
     enabled: record.enabled !== false,
     maxMessages: readInteger('maxMessages', MIN_ANALYSIS_MESSAGES, MAX_ANALYSIS_MESSAGES, 300),
     retentionDays: readInteger('retentionDays', MIN_ANALYSIS_DAYS, MAX_ANALYSIS_DAYS, 30),
-    autoAnalyze: record.autoAnalyze !== false,
-    autoAnalyzeThreshold: readInteger(
-      'autoAnalyzeThreshold',
-      MIN_AUTO_ANALYZE_THRESHOLD,
-      MAX_AUTO_ANALYZE_THRESHOLD,
-      20,
-    ),
   };
 }
 
@@ -1192,11 +1166,6 @@ export function registerBindRoutes(
     }),
     webServer.register({
       kind: 'exact',
-      path: BIND_PERSONAS_PATH,
-      handler: (req, res) => { handlePersonas(req, res, options); },
-    }),
-    webServer.register({
-      kind: 'exact',
       path: BIND_NAPCAT_PATH,
       handler: (req, res) => handleNapcat(req, res, options, logger),
     }),
@@ -1444,78 +1413,6 @@ async function handleConfig(req: IncomingMessage, res: ServerResponse, options: 
     return;
   }
   sendJson(res, 200, { ok: true, message: '配置已保存，插件将自动重载（进行中的机器人会话将重置）' });
-}
-
-/** 查询参数里的非负整数（无效时返回 undefined，由下游取默认值） */
-function queryInt(value: string | null): number | undefined {
-  if (value === null || value.trim() === '') return undefined;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0) return undefined;
-  return Math.trunc(parsed);
-}
-
-/** 查询参数里的文本（空串视为未提供） */
-function queryText(value: string | null): string | undefined {
-  const text = value?.trim();
-  return text === undefined || text === '' ? undefined : text;
-}
-
-/**
- * 群友人格列表（GET）：
- * `/qqbot/im-qqbot/personas?name=&openid=&trait=&limit=&offset=`
- *
- * 数据只在本机，返回结构与设置面板表格行一致；未接入时返回空表而非 404，
- * 让面板能区分「没有记录」与「路由缺失」。
- */
-function handlePersonas(
-  req: IncomingMessage,
-  res: ServerResponse,
-  options: BindRoutesOptions,
-): void {
-  if (!trusted(req)) {
-    sendJson(res, 403, { ok: false, profiles: [], total: 0, error: 'forbidden' });
-    return;
-  }
-  if (req.method !== 'GET' && req.method !== 'HEAD') {
-    sendJson(res, 405, { ok: false, profiles: [], total: 0, error: 'method not allowed' });
-    return;
-  }
-  if (options.listPersonaProfiles === undefined) {
-    sendJson(res, 200, { ok: false, profiles: [], total: 0, error: '群友人格档案未启用' });
-    return;
-  }
-
-  let url: URL;
-  try {
-    url = new URL(req.url ?? '/', 'http://localhost');
-  } catch {
-    sendJson(res, 400, { ok: false, profiles: [], total: 0, error: 'invalid url' });
-    return;
-  }
-
-  const name = queryText(url.searchParams.get('name'));
-  const openid = queryText(url.searchParams.get('openid'));
-  const trait = queryText(url.searchParams.get('trait'));
-  const limit = queryInt(url.searchParams.get('limit'));
-  const offset = queryInt(url.searchParams.get('offset'));
-  const query: PersonaProfileQuery = {
-    ...(name !== undefined ? { name } : {}),
-    ...(openid !== undefined ? { openid } : {}),
-    ...(trait !== undefined ? { trait } : {}),
-    ...(limit !== undefined ? { limit } : {}),
-    ...(offset !== undefined ? { offset } : {}),
-  };
-
-  try {
-    sendJson(res, 200, options.listPersonaProfiles(query));
-  } catch (err) {
-    sendJson(res, 500, {
-      ok: false,
-      profiles: [],
-      total: 0,
-      error: `读取群友人格档案失败：${err instanceof Error ? err.message : String(err)}`,
-    });
-  }
 }
 
 /**

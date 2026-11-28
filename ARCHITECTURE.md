@@ -19,7 +19,7 @@
 5. `src/transport/inbound.ts` — 一条消息如何组装成 agent 能读的 `agentBody`。
 6. `src/transport/outbound.ts` — agent 的输出如何变成 QQ 消息。
 7. `src/session/session-manager.ts` + `src/session/prompt-assembly.ts` — 会话生命周期与系统提示词分层。
-8. `src/features/` — 主动发言、人格分析、问答、审批、控制工具等横切功能。
+8. `src/features/` — 主动发言、群友资料查询、问答、审批、控制工具等横切功能。
 
 ## 2. 分层与依赖规则
 
@@ -56,7 +56,7 @@ src/{memory,personas,identity,features,media,voice,sticker,model,commands,expres
 | `src/index.ts` | 插件入口：读取配置、启动网关 | `apply()` |
 | `src/config.ts` | 全部配置类型与 Schema（单一事实源） | `ConfigSchema`、各子 Schema |
 | `src/types.ts` | 跨模块最小类型：`ChatScope`、`ReplyTarget`、`ChannelKind`、`Logger` | — |
-| `src/gateway/` | 装配层 | `bootstrap.ts`、`common.ts`、`middleware-setup.ts`、`multiplex.ts`、`persona-runtime.ts` |
+| `src/gateway/` | 装配层 | `bootstrap.ts`、`common.ts`、`middleware-setup.ts`、`multiplex.ts`、`archive-runtime.ts` |
 | `src/transport/` | 入站/出站与协议辅助 | `inbound.ts`、`ambient.ts`、`outbound.ts`、`outbound-buffer.ts`、`splitter.ts`、`reply-limiter.ts`、`attachment.ts` |
 | `src/onebot/` | OneBot 11 传输实现 | `gateway.ts`、`client.ts`、`sender.ts`、`message.ts`、`napcat.ts` |
 | `src/session/` | 会话生命周期与提示词 | `session-manager.ts`、`prompt-assembly.ts`、`idle-evictor.ts`、`types.ts` |
@@ -89,7 +89,7 @@ apply(ctx, config)
 `bootstrapGateway`：
 
 1. 创建**唯一**的 `SessionManager`（它会加载记忆、身份、名字、模型偏好）。
-2. `createPersonaRuntime()` 创建人格档案、人格库、自动分析器、LLM 引用。
+2. `createArchiveRuntime()` 创建群友发言档案与 LLM 引用（不做后台分析）。
 3. 把 LLM 注入 `SessionManager`：记忆慢路径、主动发言判断。
 4. 创建 `onebot/gateway.ts`：OneBot WS/HTTP、中间件、入站、发送适配。
 5. 用 `MultiplexSender` 把 sender/mediaSender 合成一个出口。
@@ -107,7 +107,7 @@ apply(ctx, config)
 2. `messageFilter` — bot 回声与重复消息。
 3. `accessPolicy` — 访问控制（c2c / group）。
 4. `historyBuffer` — 群历史环形缓冲；在 @ 门控之前，未 @ 也计数。
-5. `personaArchive` — 群友人格档案（可选）。
+5. `personaArchive` — 群友发言档案（`qqbot_view_person` 的数据源）。
 6. `quoteRef` — 引用消息索引与解析。
 7. `attachmentProcessor`（当前消息）— 下载图片/视频/文件。
 8. `historyMedia` — 把媒体本地路径回填历史。
@@ -180,9 +180,10 @@ session/event
 | 80 | `qqbot:global-prompt` | 所有会话通用约束 |
 | 82 | `qqbot:identity` | 主人/管理员/朋友/陌生人 |
 | 84 | `qqbot:names` | 机器人自称 / QQ 昵称 |
-| 85 | `qqbot:persona` | 人格 prompt + 颜文字 |
+| 85 | `qqbot:persona-directive` | 指令：每轮先调 `qqbot_current_persona` 获取当前人格 |
 | 86 | `qqbot:persona-tools` | 工具白名单说明 |
 | 86.5 | `qqbot:vision` | 图片路径 → 调 `qqbot_describe_image` |
+| 86.8 | `qqbot:person-lookup` | 需要时调 `qqbot_view_person` 查发言档案 |
 | 87 | 记忆 / 人物画像 | 会话关系 + 跨会话画像 |
 | 88 | 语音 | 何时发语音、怎么发 |
 | 89 | 表情包 | 何时发表情、图库里有什么 |
@@ -198,7 +199,7 @@ session/event
 - `identities.json`：同一账号命名空间内 personId → 别名列表。
 - `names.json`：机器人自称 / QQ 账号昵称。
 - `model-prefs.json`：per-peer 模型 / preset / 人格 / sessionId。
-- `persona-archive.json` / `persona-profiles.json`：群友人格档案与分析结果。
+- `persona-archive.json`：群友发言档案（只由 `qqbot_view_person` 按需读取）。
 - `stickers.json`：表情包元数据。
 - `workspace/`：agent 默认工作目录。
 - `media/`：临时媒体，按 TTL 清理。
@@ -240,6 +241,17 @@ tools.ts      qqbot_pick/send/save/list/update_sticker
 prompt.ts     给模型的表情说明（order 89）
 ```
 
+### 9.4 群友资料查询
+
+```
+persona-archive.ts   滚动归档消息（数据源）
+persona-summary.ts   目标选择 + 统计/最近发言摘要 + 注册 qqbot_view_person
+persona-tool.ts      注册 qqbot_current_persona（每轮返回当前人格名字/设定）
+prompt-assembly.ts   order 86.8 告诉模型何时调用工具
+```
+
+没有后台分析器：档案只写盘，模型在需要时调用工具读取。当前对话对象可被所有人查看；指定其他人需要 owner/admin。
+
 ## 10. 扩展点
 
 | 想做什么 | 改哪里 |
@@ -271,7 +283,7 @@ prompt.ts     给模型的表情说明（order 89）
 
 ## 12. 新人常见误区
 
-- **把 `memory` 和 `personaAnalysis` 当成一套**：前者是关系与自述，后者是消息原文与人格画像；开关、存储、用途都不同。
+- **把 `memory` 和 `personaAnalysis` 当成一套**：前者是关系与自述，后者是消息原文与统计；前者进提示词，后者只在调用 `qqbot_view_person` 时读取。
 - **以为群聊里所有消息都会进模型**：取决于 OneBot 实现与账号权限；未 @ 消息可能根本不会投递给插件。
 - **以为主动发言是「每条都回」**：它有多层门控，默认关闭，而且模型可以判断沉默。
 - **在 `inbound.ts` 里找主动发言**：已经拆到 `transport/ambient.ts`。

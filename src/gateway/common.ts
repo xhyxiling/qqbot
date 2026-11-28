@@ -16,7 +16,8 @@ import { startMediaCleanup } from '../media/media-cleaner.ts';
 import { ensureVisionInputModal, registerDescribeImageTool } from '../media/vision-tool.ts';
 import { registerSolveTool } from '../features/solve-tool.ts';
 import { registerTextTools } from '../features/text-tools.ts';
-import { registerPersonaAnalysisTool } from '../features/persona-analysis-tool.ts';
+import { registerCurrentPersonaTool } from '../features/persona-tool.ts';
+import { registerPersonSummaryTool } from '../features/persona-summary.ts';
 import { registerControlTool } from '../features/control-tool.ts';
 import { registerSendFileTool } from '../media/send-file-tool.ts';
 import { DeliverablesDeliverer } from '../transport/deliverables.ts';
@@ -27,7 +28,7 @@ import { registerVoiceTool, VOICE_TOOL_NAME } from '../voice/voice-tool.ts';
 import { StickerEngine, mergeStickerConfig, registerStickerEngine, type StickerVisionDeps } from '../sticker/index.ts';
 import { registerStickerTools, registerSendStickerTool, registerSaveStickerTool, registerListStickerTool, registerUpdateStickerTool } from '../sticker/tools.ts';
 import type { StickerConfig } from '../sticker/types.ts';
-import type { PersonaRuntime } from './persona-runtime.ts';
+import type { ArchiveRuntime } from './archive-runtime.ts';
 import type { GatewayTransport } from './transport.ts';
 
 export interface GatewayCommonDeps {
@@ -35,12 +36,12 @@ export interface GatewayCommonDeps {
   config: ImQQBotConfig;
   logger: Logger;
   manager: SessionManager;
-  persona: PersonaRuntime;
+  archive: ArchiveRuntime;
   transport: GatewayTransport;
 }
 
 export async function bootstrapCommon(deps: GatewayCommonDeps): Promise<void> {
-  const { ctx, config, logger, manager, persona, transport } = deps;
+  const { ctx, config, logger, manager, archive, transport } = deps;
   const { sender, mediaSender } = transport;
 
   // ── 出站：dsh session/event → QQ 消息 ──
@@ -63,8 +64,8 @@ export async function bootstrapCommon(deps: GatewayCommonDeps): Promise<void> {
     // 注入 vision 服务：收藏时调视觉模型生成画面描述 + 标签
     const attachments = ctx.get('attachments') as { saveImage?: unknown } | undefined;
     const visionDeps: StickerVisionDeps | undefined =
-      stickerConfig.collector.autoDescribe && persona.llm?.stream && attachments?.saveImage && config.vision?.enabled
-        ? { services: { llm: persona.llm, attachments: attachments as never }, config: config.vision }
+      stickerConfig.collector.autoDescribe && archive.llm?.stream && attachments?.saveImage && config.vision?.enabled
+        ? { services: { llm: archive.llm, attachments: attachments as never }, config: config.vision }
         : undefined;
     stickerEngine = new StickerEngine(stickerConfig, logger, visionDeps);
     await stickerEngine.start();
@@ -141,22 +142,19 @@ export async function bootstrapCommon(deps: GatewayCommonDeps): Promise<void> {
   // ── 实用小工具注册（翻译 / 总结 / 讲解 / 改写，同样走会话当前模型） ──
   registerTextTools(ctx, manager, config, logger);
 
-  // ── 群友人格分析（qqbot_analyze_persona，按本地群聊档案总结） ──
-  registerPersonaAnalysisTool(ctx, {
+  // ── 群友资料查看（qqbot_view_person，按本地发言档案返回统计与最近发言） ──
+  registerPersonSummaryTool(ctx, {
     manager,
     config,
-    archive: persona.archive,
-    profiles: persona.profileStore,
+    archive: archive.archive,
     logger,
   });
 
+  // ── 取当前人格（qqbot_current_persona：模型每轮发言前先确认自己是谁） ──
+  registerCurrentPersonaTool(ctx, { manager, logger });
+
   // ── 管理工具（qqbot_control：主人用自然语言改人格/记忆/会话） ──
-  registerControlTool(ctx, {
-    manager,
-    config,
-    logger,
-    ...(persona.services !== undefined ? { persona: persona.services } : {}),
-  });
+  registerControlTool(ctx, { manager, config, logger });
 
   // ── 附件发送工具注册（qqbot_send_file，发送器见 mediaSender） ──
   registerSendFileTool(ctx, mediaSender, manager, config, logger);
@@ -170,10 +168,8 @@ export async function bootstrapCommon(deps: GatewayCommonDeps): Promise<void> {
 
       return async () => {
         logger.info('Shutting down');
-        // 写盘是 1s 防抖的，退出前补一次，避免最后一条消息/分析结果丢失
-        persona.autoAnalyzer?.dispose();
-        persona.archive?.flush();
-        persona.profileStore?.flush();
+        // 写盘是 1s 防抖的，退出前补一次，避免最后一条消息丢失
+        archive.archive?.flush();
         // 刷盘 sticker 元数据
         if (stickerEngine) {
           registerStickerEngine(null); // 先注销 holder，防止 dispose 期间 inbound 还在访问

@@ -26,7 +26,6 @@ import type { ImQQBotConfig } from '../config.ts';
 import type { SessionManager } from '../session/index.ts';
 import type { Logger } from '../types.ts';
 import { buildCommandList } from '../commands/index.ts';
-import type { PersonaCommandServices } from '../commands/types.ts';
 import { attachmentProcessor } from '../middleware/attachment.ts';
 import { historyMedia } from '../middleware/history-media.ts';
 import { handleAmbientGroupMessage } from '../transport/ambient.ts';
@@ -35,19 +34,14 @@ import { getHistoryStore, historyGroupKey } from '../features/history-store.ts';
 import {
   createPersonaArchiveMiddleware,
   type PersonaArchive,
-  type PersonaArchiveNotice,
 } from '../features/persona-archive.ts';
 
 export interface MiddlewareSetupOptions {
   config: ImQQBotConfig;
   manager: SessionManager;
   logger: Logger;
-  /** 群聊人格档案（personaAnalysis.enabled=false 时不传，不记录） */
+  /** 群友发言档案（personaAnalysis.enabled=false 时不传，不记录） */
   personaArchive?: PersonaArchive;
-  /** 新消息写入档案后的同步通知（自动人格分析排队用，不能阻塞消息链） */
-  onArchived?: (notice: PersonaArchiveNotice) => void;
-  /** /人格分析 命令使用的档案与模型服务（档案未启用时不传） */
-  personaServices?: PersonaCommandServices;
   /** 富媒体下载是否允许 http / 内网地址（OneBot 本地 NapCat 媒体） */
   allowInsecureMedia?: boolean;
 }
@@ -59,7 +53,7 @@ export interface MiddlewareSetupOptions {
  * OneBot 传入满足同一最小契约的门面对象即可。
  */
 export function buildMiddlewares(options: MiddlewareSetupOptions): Middleware[] {
-  const { config, manager, logger, personaArchive, onArchived, personaServices, allowInsecureMedia } = options;
+  const { config, manager, logger, personaArchive, allowInsecureMedia } = options;
   const middlewares: Middleware[] = [];
 
   // 1. 错误兜底（最外层洋葱皮）
@@ -98,10 +92,11 @@ export function buildMiddlewares(options: MiddlewareSetupOptions): Middleware[] 
     },
   }));
 
-  // 4.5. 群聊人格档案 — 同样在 @ 门控之前，未 @bot 的消息也计入长期样本；
-  //      访问控制已在第 3 步完成，被拒绝的群/用户不会写盘
+  // 4.5. 群友发言档案 — 同样在 @ 门控之前，未 @bot 的消息也计入本地样本；
+  //      访问控制已在第 3 步完成，被拒绝的群/用户不会写盘。
+  //      档案只供 qqbot_view_person 按需查询，不再自动分析。
   if (personaArchive !== undefined) {
-    middlewares.push(createPersonaArchiveMiddleware(config, personaArchive, logger, onArchived));
+    middlewares.push(createPersonaArchiveMiddleware(config, personaArchive, logger));
   }
 
   // 4.6. 引用解析与索引 — 门控之前：未 @ 的消息也参与索引，之后被引用时查得到
@@ -149,11 +144,7 @@ export function buildMiddlewares(options: MiddlewareSetupOptions): Middleware[] 
     // 关闭 autoHelp：help 命令由 qqbot 注册为 /bot-help，
     // 避免 SDK 再自动注册一个无前缀的 /help 造成重复
     autoHelp: false,
-    commands: buildCommandList({
-      manager,
-      config,
-      ...(personaServices !== undefined ? { persona: personaServices } : {}),
-    }),
+    commands: buildCommandList({ manager, config }),
   });
   middlewares.push(slash.middleware);
 
@@ -192,20 +183,14 @@ export function setupMiddlewares(
   config: ImQQBotConfig,
   manager: SessionManager,
   logger: Logger,
-  /** 群聊人格档案（personaAnalysis.enabled=false 时不传，不记录） */
+  /** 群友发言档案（personaAnalysis.enabled=false 时不传，不记录） */
   personaArchive?: PersonaArchive,
-  /** 新消息写入档案后的同步通知（自动人格分析排队用，不能阻塞消息链） */
-  onArchived?: (notice: PersonaArchiveNotice) => void,
-  /** /人格分析 命令使用的档案与模型服务（档案未启用时不传） */
-  personaServices?: PersonaCommandServices,
 ): void {
   for (const middleware of buildMiddlewares({
     config,
     manager,
     logger,
     ...(personaArchive !== undefined ? { personaArchive } : {}),
-    ...(onArchived !== undefined ? { onArchived } : {}),
-    ...(personaServices !== undefined ? { personaServices } : {}),
   })) {
     bot.use(middleware);
   }

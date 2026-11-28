@@ -18,7 +18,6 @@ import { canUseCommand, isOwnerOrAdmin } from '../identity/role.ts';
 import type { Logger } from '../types.ts';
 import type { SessionManager } from '../session/index.ts';
 import type { DshAgent } from '../session/types.ts';
-import type { PersonaCommandServices } from '../commands/types.ts';
 import { buildCommandList } from '../commands/index.ts';
 import { sanitizeName } from '../identity/names-store.ts';
 
@@ -76,8 +75,6 @@ export interface ControlToolOptions {
   manager: SessionManager;
   config: ImQQBotConfig;
   logger: Logger;
-  /** /人格分析 所需服务（档案未启用时为 undefined） */
-  persona?: PersonaCommandServices;
 }
 
 /** 把 <qqbot-cmd-input .../> 标签还原成可读文本，避免模型照抄标签 */
@@ -138,7 +135,7 @@ const DESCRIPTION =
   + '("重新开始聊", "清空上下文"), compact history, switch model or preset, rename you or the QQ account, '
   + 'or check the bot status. '
   + 'Never ask the user to type slash commands — just call this tool. '
-  + '`args` is the command argument: persona id (or "default"/"off"), "add 内容"/"del 3"/"clear" for memory, '
+  + '`args` is the command argument: persona id or display name (or "default"/"off"), "add 内容"/"del 3"/"clear" for memory, '
   + '"provider/model" or model id for model, preset id for preset, the new name for rename_bot/rename_qq. '
   + 'rename_bot only changes how you call yourself; rename_qq changes the QQ account profile nickname. '
   + 'The two names are independent. '
@@ -148,7 +145,7 @@ const DESCRIPTION =
  * 注册 qqbot_control 工具（tools 服务不可用时告警跳过，不阻断启动）
  */
 export function registerControlTool(ctx: Context, options: ControlToolOptions): void {
-  const { manager, config, logger, persona } = options;
+  const { manager, config, logger } = options;
   let tools: ToolsRegistryLike | undefined;
   try {
     tools = ctx.get('tools') as ToolsRegistryLike | undefined;
@@ -174,7 +171,7 @@ export function registerControlTool(ctx: Context, options: ControlToolOptions): 
         args: {
           type: 'string',
           description:
-            'Argument passed to the action. persona: persona id / "default" / "off"; '
+            'Argument passed to the action. persona: persona id or display name / "default" / "off"; '
             + 'memory: "add 内容" | "del 序号" | "clear" | omitted to view; '
             + 'model: "provider/model" or model id or "default"; preset: preset id or "reset"; '
             + 'rename_bot / rename_qq: the new name.',
@@ -281,11 +278,7 @@ export function registerControlTool(ctx: Context, options: ControlToolOptions): 
         return { ok: false, text: `不支持的操作: ${action || '(空)'}` };
       }
 
-      const commands = buildCommandList({
-        manager,
-        config,
-        ...(persona !== undefined ? { persona } : {}),
-      });
+      const commands = buildCommandList({ manager, config });
       const command = commands.find((cmd) => commandNames(cmd.name as string | readonly string[])
         .includes(commandName));
       if (command === undefined) {

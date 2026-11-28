@@ -29,7 +29,12 @@ import {
   resolveToolBinding,
   type ToolsRestrictServiceLike,
 } from '../personas/persona-tools.ts';
-import { DEFAULT_TOOL_ALLOWLIST, STICKER_TOOL_NAMES, CONTROL_TOOL_NAME } from '../shared/tool-catalog.ts';
+import {
+  DEFAULT_TOOL_ALLOWLIST,
+  STICKER_TOOL_NAMES,
+  CONTROL_TOOL_NAME,
+  CURRENT_PERSONA_TOOL_NAME,
+} from '../shared/tool-catalog.ts';
 import type { ModelRoute, ModelEntry } from '../model/types.ts';
 import { NamesStore, type BotNames } from '../identity/names-store.ts';
 import {
@@ -507,6 +512,8 @@ export class SessionManager {
     // 管理工具属于「机器人自身设置入口」：人格写 tools:[] 也不能把它关掉，
     // 否则主人一旦切到封闭人格就再也换不回来了
     if (!whitelist.includes(CONTROL_TOOL_NAME)) whitelist.push(CONTROL_TOOL_NAME);
+    // 取当前人格同理：每轮回复前都要调用，不能被人格白名单关掉
+    if (!whitelist.includes(CURRENT_PERSONA_TOOL_NAME)) whitelist.push(CURRENT_PERSONA_TOOL_NAME);
     return { whitelist, blocked };
   }
 

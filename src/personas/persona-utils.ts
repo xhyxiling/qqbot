@@ -71,6 +71,13 @@ export function buildPersonaPromptSections(
      * 还有 C，模型会按说明认为 C 不可用，从而不敢调用（语音就发不出来）。
      */
     extraTools?: readonly string[];
+    /**
+     * 不注入人格正文与颜文字。
+     *
+     * 人格改为由 `qqbot_current_persona` 工具在运行时返回时，system prompt
+     * 只保留「先调用工具」的指令；人格白名单说明（order 86）仍然保留。
+     */
+    omitPrompt?: boolean;
   },
 ): PromptSection[] {
   const sections: PromptSection[] = [];
@@ -78,11 +85,13 @@ export function buildPersonaPromptSections(
   if (globalText) {
     sections.push({ name: 'qqbot:global-prompt', order: 80, text: globalText });
   }
-  const personaText = persona?.prompt.trim();
-  const kaomojiText = buildKaomojiPrompt(persona);
-  const styleText = [personaText, kaomojiText].filter((text): text is string => !!text).join('\n\n');
-  if (styleText) {
-    sections.push({ name: 'qqbot:persona', order: 85, text: styleText });
+  if (options?.omitPrompt !== true) {
+    const personaText = persona?.prompt.trim();
+    const kaomojiText = buildKaomojiPrompt(persona);
+    const styleText = [personaText, kaomojiText].filter((text): text is string => !!text).join('\n\n');
+    if (styleText) {
+      sections.push({ name: 'qqbot:persona', order: 85, text: styleText });
+    }
   }
   // 没人格或人格没写 tools 时按默认清单放行，不额外说明（默认清单本来就很宽）
   if (persona?.tools !== undefined) {

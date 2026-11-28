@@ -45,12 +45,12 @@ dsh-qqbot 是 deepseek-harness 的一个 Cordis 插件：它把 QQ 当成 dsh ag
 - **会话隔离**：每个私聊用户 / 群聊各一个 dsh agent，闲置超时自动回收。
 - **人格预设**：`/persona` 切换人格；人格可绑定工具白名单（运行时硬约束）。
 - **长期记忆**：按会话记录互动次数、关系阶段与要点；另有按 personId 合并的跨会话人物画像。
-- **群友人格档案**：滚动记录群聊/私聊消息，累计发言达阈值自动分析；也可用 `/人格分析` 或 `qqbot_analyze_persona` 手动分析。
+- **群友资料查询**：本地保留群聊/私聊发言档案，模型在对话中按需调用 `qqbot_view_person` 查看某个人的统计与最近发言；owner/管理员可以点名查看其他人。
 - **群聊主动发言**：对未 @ 的旁听消息，按概率、冷却、配额筛选后让模型判断「现在插话会不会打断别人」；模型也可以输出 `[SILENT]` 保持沉默。
 - **语音回复**：模型调用 `qqbot_voice` 后，本轮回复直接合成 QQ 语音；失败自动退回文字。
 - **表情包进化**：自动收藏群图片、按语境挑选并发送，定期重算热度与淘汰。
 - **富媒体理解**：图片/视频下载、视觉理解（`qqbot_describe_image`）、文件发送（`qqbot_send_file`）。
-- **设置面板**：连接方式、访问控制、身份、群友人格、对话、语音、表情包、模型、人格、插件更新等页签。
+- **设置面板**：连接方式、访问控制、身份、对话、语音、表情包、模型、人格、插件更新等页签。
 - **插件更新**：识别 git / npm / 本地安装，对比远端后一键更新并 HMR 重载。
 
 ## 核心概念（新人必读）
@@ -102,18 +102,18 @@ onebot:
 
 人格还可以绑定工具白名单：`tools` 不写使用默认放行清单，`tools: []` 表示没有任何工具。工具权限是硬约束，不是提示词约束。
 
-### 4. 记忆 vs 人格档案
+### 4. 记忆 vs 发言档案
 
 这是两套独立数据，别混用：
 
-| | 长期记忆 `memory` | 群友人格档案 `personaAnalysis` |
+| | 长期记忆 `memory` | 群友发言档案 `personaAnalysis` |
 |---|---|---|
-| 存什么 | 关系阶段、互动次数、自述要点、人物画像 | 消息原文、分析出的人格档案 |
-| 粒度 | 按会话 + 按 personId | 按 personId 跨群/跨私聊合并 |
-| 用途 | 让对话记得「我们聊过什么」 | 让机器人「了解一个人」 |
-| 存储 | `memory.onebot.json` | `persona-archive.json` / `persona-profiles.json` |
+| 存什么 | 关系阶段、互动次数、自述要点、人物画像 | 消息原文与基础统计 |
+| 粒度 | 按会话 + 按 personId | 按 senderId 跨群/跨私聊合并 |
+| 用途 | 让对话记得「我们聊过什么」 | 供 `qqbot_view_person` 按需查看历史发言 |
+| 存储 | `memory.onebot.json` | `persona-archive.json` |
 
-记忆按 OneBot 账号命名空间隔离；同一个人在不同群、私聊里的身份可以在同一份人物画像里合并。
+发言档案不做后台人格分析，也不会自动写进提示词；只有模型调用 `qqbot_view_person` 时才读取。记忆按 OneBot 账号命名空间隔离；同一个人在不同群、私聊里的身份可以在同一份人物画像里合并。
 
 ### 5. 群聊主动发言
 
@@ -242,7 +242,7 @@ dsh agent loop → LLM
 2. `messageFilter` — bot 回声 / 去重
 3. `accessPolicy` — 私聊 / 群聊访问控制
 4. `historyBuffer` — 群历史缓冲（@ 门控之前，未 @ 也计数）
-5. `personaArchive` — 群友人格档案（可选）
+5. `personaArchive` — 群友发言档案（`qqbot_view_person` 的数据源）
 6. `quoteRef` — 引用解析与索引
 7. `attachmentProcessor`（当前消息）— 媒体下载
 8. `historyMedia` — 回填媒体路径到历史
@@ -288,9 +288,10 @@ OneBot HTTP API
 | 80 | 全局提示词 | `globalPrompt` |
 | 82 | 身份说明 | `identity` |
 | 84 | 机器人自称 / QQ 昵称 | `names.json` |
-| 85 | 人格 prompt + 颜文字 | `personas[]` |
+| 85 | 人格指令：每轮先调 `qqbot_current_persona` 获取当前人格 | 全局人格覆盖 > `defaultPersona` |
 | 86 | 人格工具白名单说明 | `personas[].tools` |
 | 86.5 | 看图说明 | `vision.enabled` |
+| 86.8 | 群友资料查询说明 | `personaAnalysis.enabled` |
 | 87 | 会话记忆 + 人物画像 | `memory` |
 | 88 | 语音回复说明 | `voice` |
 | 89 | 表情包说明 | `sticker` |
@@ -430,19 +431,17 @@ memory:
 - 关系阶段由互动次数推导：初识（<5）→ 眼熟（<20）→ 熟悉（<60）→ 亲近（<200）→ 很亲近。
 - `/memory` 仅管理员可用：查看、`add`、`del`、`clear`。
 
-### 群友人格档案
+### 群友发言档案
 
 ```yaml
 personaAnalysis:
   enabled: true
   maxMessages: 300
   retentionDays: 30
-  autoAnalyze: true
-  autoAnalyzeThreshold: 20
 ```
 
-- 数据只在本机：原文 `persona-archive.json`，分析结果 `persona-profiles.json`。
-- 自动分析按 personId 串行排队，失败冷却 10 分钟，单次超时 120 秒，不阻塞消息回复。
+- 数据只在本机：`persona-archive.json`；不做后台分析，也不生成人格画像。
+- 模型在对话中调用 `qqbot_view_person` 时，才返回某个人的消息数、会话分布与最近发言；owner/管理员可指定昵称或 QQ 号查看其他人。
 - 记录发生在访问控制之后、@ 门控之前；未 @ 的群消息也会入档，但不会逐条触发回复。
 - 只有 OneBot 把消息投递给插件，档案才有内容；如果实现只转发 @ 消息，未 @ 的聊天不会入档。
 
@@ -515,7 +514,6 @@ voice:
 | `/model` | 查看或切换模型 | 管理员 |
 | `/preset` | 查看或切换 agent preset | 管理员 |
 | `/persona`（`/人格`） | 查看 / 切换人格；`default` 跟随默认，`off` 关闭本会话人格 | 管理员 |
-| `/人格分析`（`/persona-analysis`） | 分析被 @ 的群友；也可用昵称或 QQ 号指定 | 管理员 |
 | `/tools`（`/工具`） | 诊断当前人格的工具绑定与宿主工具清单 | 管理员 |
 | `/memory`（`/记忆`） | 查看 / 管理本会话长期记忆 | 管理员 |
 | `/whoami`（`/我是谁`） | 查看当前场景 QQ 号 / 群号与身份 | 所有人 |
@@ -529,7 +527,8 @@ voice:
 
 默认放行清单：
 
-- 插件工具：`qqbot_solve`、`qqbot_describe_image`、`qqbot_send_file`、`qqbot_translate`、`qqbot_summarize`、`qqbot_explain`、`qqbot_rewrite`、`qqbot_analyze_persona`、`qqbot_pick_sticker`、`qqbot_save_sticker`、`qqbot_send_sticker`、`qqbot_list_stickers`、`qqbot_update_sticker`
+- 插件工具：`qqbot_solve`、`qqbot_describe_image`、`qqbot_send_file`、`qqbot_translate`、`qqbot_summarize`、`qqbot_explain`、`qqbot_rewrite`、`qqbot_view_person`、`qqbot_pick_sticker`、`qqbot_save_sticker`、`qqbot_send_sticker`、`qqbot_list_stickers`、`qqbot_update_sticker`
+- 运行时人格：`qqbot_current_persona`（每轮回复前获取当前人格的名字、完整设定与颜文字规则；人格可被全局切换，始终放行）
 - 管理工具：`qqbot_control`（主人/管理员用自然语言改人格/记忆/会话）
 - 宿主只读能力：`ask_user_question`、`web_search`、`web_fetch`
 
@@ -545,8 +544,7 @@ voice:
 | `identities.json` | 同一人跨 senderId 的身份别名 |
 | `names.json` | 机器人自称 / QQ 账号昵称 |
 | `model-prefs.json` | per-peer 模型 / preset / 人格 / sessionId |
-| `persona-archive.json` | 群聊/私聊消息档案 |
-| `persona-profiles.json` | 分析结果 |
+| `persona-archive.json` | 群聊/私聊消息档案（`qqbot_view_person` 的数据源） |
 | `stickers.json` | 表情包元数据 |
 | `workspace/` | Agent 默认工作目录 |
 | `media/` | 临时媒体（按 TTL 清理） |
@@ -582,7 +580,7 @@ npx @deepseek-ai/dsh web --profile qqbot --patch /path/to/dsh-qqbot/cordis.dev.y
 |------|--------|
 | 私聊 / 群里完全没反应 | OneBot 是否启动、HTTP/WS 端口与 token 是否一致、`onebot.selfId` 是否正确、插件日志是否连上 |
 | 群里 @ 了机器人但不回复 | `requireMention`、访问控制、机器人是否真的被 @、日志里是否出现 `mentionGate` 拦截 |
-| 群友人格档案记录不全 | OneBot 是否投递未 @ 的群消息；检查 NapCat / LLOneBot 的群消息上报设置 |
+| 群友资料查不到 / 很少 | OneBot 是否投递未 @ 的群消息；检查 NapCat / LLOneBot 的群消息上报设置与 `personaAnalysis.enabled` |
 | 主动发言一直不触发 | 是否收到未 @ 群消息；`proactive.enabled`；概率、冷却、每小时/每天配额；模型判断可能选择沉默 |
 | `/whoami` 和配置里的 QQ 号对不上 | 使用 `/whoami` 输出的当前场景 ID；多数实现里私聊与群聊的 sender id 都是 QQ 号 |
 | 记忆「串号」或丢了一部分 | 是否换了 `selfId`；不同 OneBot 账号命名空间使用不同存储 |

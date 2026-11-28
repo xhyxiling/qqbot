@@ -24,7 +24,7 @@ describe('TOOL_CATALOG', () => {
       'qqbot_summarize',
       'qqbot_explain',
       'qqbot_rewrite',
-      'qqbot_analyze_persona',
+      'qqbot_view_person',
       'qqbot_pick_sticker',
       'qqbot_save_sticker',
       'qqbot_send_sticker',
@@ -62,6 +62,7 @@ describe('DEFAULT_TOOL_ALLOWLIST', () => {
     expect(DEFAULT_TOOL_ALLOWLIST).toEqual([
       ...catalogToolNames(),
       'qqbot_control',
+      'qqbot_current_persona',
       'ask_user_question',
       'web_search',
       'web_fetch',

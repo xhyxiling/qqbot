@@ -62,22 +62,19 @@ export interface MemoryConfig {
 }
 
 /**
- * 群聊人格档案：把群聊/私聊消息滚动写入本地，供 `qqbot_analyze_persona` 分析群友。
+ * 群友发言档案：把群聊/私聊消息滚动写入本地，供 `qqbot_view_person` 按需查询。
  *
  * 数据落在 ~/.dsh-qqbot/persona-archive.json，只在本机使用，不上传；
  * 关闭后不再记录新消息（已有档案保留，可通过删除该文件清理）。
+ * 不做后台分析，也不生成人格画像。
  */
 export interface PersonaAnalysisConfig {
-  /** 是否记录群聊/私聊消息用于人格分析（关闭后工具返回未启用提示） */
+  /** 是否记录群聊/私聊消息（关闭后工具返回未启用提示） */
   enabled: boolean;
   /** 每个会话最多保留的消息条数（超出后淘汰最旧的） */
   maxMessages: number;
   /** 消息保留天数（超过天数的记录在加载/写入时清理） */
   retentionDays: number;
-  /** 是否在某位群友累计发言达到阈值后自动生成/更新人格档案 */
-  autoAnalyze: boolean;
-  /** 自动分析的触发条数（累计发言达到该值后分析，之后每新增同样条数再更新） */
-  autoAnalyzeThreshold: number;
 }
 
 export interface MediaConfig {
@@ -336,7 +333,7 @@ export interface ImQQBotConfig {
   identity: IdentityConfig;
   /** 记忆与关系状态 */
   memory: MemoryConfig;
-  /** 群聊人格档案（人格分析的数据源） */
+  /** 群友发言档案（qqbot_view_person 的数据源） */
   personaAnalysis: PersonaAnalysisConfig;
   /** 访问控制 */
   access: AccessControlConfig;
@@ -375,18 +372,14 @@ export const MemorySchema: Schema<MemoryConfig> = Schema.object({
     .description('同一人的人工别名组（官方 openid / OneBot QQ 号）'),
 });
 
-/** 群聊人格档案子 Schema（独立导出：config 路由的服务端校验复用） */
+/** 群友发言档案子 Schema（独立导出：config 路由的服务端校验复用） */
 export const PersonaAnalysisSchema: Schema<PersonaAnalysisConfig> = Schema.object({
   enabled: Schema.boolean().default(true)
-    .description('是否记录群聊/私聊消息用于人格分析（关闭后 qqbot_analyze_persona 返回未启用提示）'),
+    .description('是否记录群聊/私聊消息（关闭后 qqbot_view_person 返回未启用提示）'),
   maxMessages: Schema.number().default(300)
     .description('每个会话最多保留的消息条数（20–1000，超出淘汰最旧）'),
   retentionDays: Schema.number().default(30)
     .description('消息保留天数（1–365，超过的在加载/写入时清理）'),
-  autoAnalyze: Schema.boolean().default(true)
-    .description('是否在某位群友累计发言达到阈值后自动生成/更新人格档案'),
-  autoAnalyzeThreshold: Schema.number().default(20)
-    .description('自动分析触发条数（5–200；达到后分析，之后每新增同样条数再更新一次）'),
 });
 
 /** 访问控制子 Schema（独立导出：config 路由的服务端校验复用） */
@@ -554,9 +547,7 @@ export const ConfigSchema: Schema<ImQQBotConfig> = Schema.object({
     enabled: true,
     maxMessages: 300,
     retentionDays: 30,
-    autoAnalyze: true,
-    autoAnalyzeThreshold: 20,
-  }).description('群聊人格档案（qqbot_analyze_persona 的数据源；只存本机）'),
+  }).description('群友发言档案（qqbot_view_person 的数据源；只存本机）'),
   showToolResults: Schema.boolean().default(false).description('是否展示工具调用成功结果（错误始终展示）'),
   debug: Schema.boolean().default(false),
   media: Schema.object({

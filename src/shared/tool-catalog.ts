@@ -2,7 +2,7 @@
  * 人格工具绑定的候选清单（设置面板下拉用）。
  *
  * 本部署只给 QQ 聊天放行「插件内置工具」：做题、看图、发文件，以及翻译/总结/
- * 讲解/改写四个实用小工具，再加上按本地群聊档案分析群友人格。
+ * 讲解/改写四个实用小工具，再加上按本地发言档案查看群友资料。
  * 宿主 preset 里的文件读写、PowerShell、子 agent
  * 等能力一律不进候选，运行时也不会放行（见 DEFAULT_TOOL_ALLOWLIST）。
  *
@@ -31,7 +31,7 @@ export const TOOL_CATALOG: ReadonlyArray<ToolCatalogEntry> = [
   { name: 'qqbot_summarize', label: '长文总结', group: GROUP_PLUGIN },
   { name: 'qqbot_explain', label: '讲解概念 / 代码 / 报错', group: GROUP_PLUGIN },
   { name: 'qqbot_rewrite', label: '改写 / 润色', group: GROUP_PLUGIN },
-  { name: 'qqbot_analyze_persona', label: '分析群友人格（按群聊记录）', group: GROUP_PLUGIN },
+  { name: 'qqbot_view_person', label: '查看群友发言资料（统计+最近发言）', group: GROUP_PLUGIN },
   { name: 'qqbot_pick_sticker', label: '从收藏库挑一个应景的表情包', group: GROUP_PLUGIN },
   { name: 'qqbot_save_sticker', label: '收藏当前会话最近的图片（仅主人/管理员）', group: GROUP_PLUGIN },
   { name: 'qqbot_send_sticker', label: '挑表情并直接发送（组合工具）', group: GROUP_PLUGIN },
@@ -41,6 +41,12 @@ export const TOOL_CATALOG: ReadonlyArray<ToolCatalogEntry> = [
 
 /** 管理工具：主人用自然语言改设置（人格/记忆/会话），始终放行，不受人格白名单限制 */
 export const CONTROL_TOOL_NAME = 'qqbot_control';
+
+/**
+ * 取当前人格：模型每轮发言前先调用它，拿到当前全局人格的名字与设定。
+ * 和管控工具一样始终放行（人格白名单里写 `[]` 也不能把这个能力关掉）。
+ */
+export const CURRENT_PERSONA_TOOL_NAME = 'qqbot_current_persona';
 
 /** sticker 工具：消息投递能力，和 qqbot_voice 一样始终放行（不受 persona 工具白名单限制） */
 export const STICKER_TOOL_NAMES: readonly string[] = [
@@ -64,6 +70,7 @@ export const STICKER_TOOL_NAMES: readonly string[] = [
 export const DEFAULT_TOOL_ALLOWLIST: readonly string[] = [
   ...TOOL_CATALOG.map((entry) => entry.name),
   CONTROL_TOOL_NAME,
+  CURRENT_PERSONA_TOOL_NAME,
   'ask_user_question',
   'web_search',
   'web_fetch',

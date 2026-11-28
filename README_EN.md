@@ -45,7 +45,7 @@ This project uses **OneBot 11** to connect a regular QQ account (NapCat, LLOneBo
 - **Session isolation**: one dsh agent per private user or group, with idle eviction.
 - **Personas**: switch with `/persona`; each persona can bind a tool allowlist enforced at runtime.
 - **Long-term memory**: per-session interaction count, relationship stage, notes, plus a cross-session person profile keyed by personId.
-- **Group member profiles**: archive group/private messages and analyze a member after enough activity; also available via `/persona-analysis` or `qqbot_analyze_persona`.
+- **Member archive lookup**: keep a local group/private message archive and let the model call `qqbot_view_person` when it needs to recall a member's message counts and recent messages; owners/admins can look up someone else by nickname or QQ number.
 - **Proactive group chat**: for non-mention messages, apply probability, cooldown, and quota gates, then let the model decide whether speaking would interrupt a conversation; the model may also output `[SILENT]`.
 - **Voice replies**: after `qqbot_voice`, the turn is synthesized and sent as a QQ voice message; failures fall back to text.
 - **Sticker evolution**: collect group images automatically, pick and send by context, and periodically recompute heat and evict stale stickers.
@@ -106,14 +106,14 @@ A persona can bind a tool allowlist. Omitting `tools` uses the default allowlist
 
 These are two independent stores:
 
-| | Long-term memory (`memory`) | Member profiles (`personaAnalysis`) |
+| | Long-term memory (`memory`) | Member archive (`personaAnalysis`) |
 |---|---|---|
-| Stores | Relationship stage, interaction count, self-described notes, person profile | Raw messages, analyzed profiles |
-| Scope | Per session + per personId | Per personId, merged across groups and private chats |
-| Purpose | Remember "what we talked about" | Understand "who this person is" |
-| Storage | `memory.onebot.json` | `persona-archive.json` / `persona-profiles.json` |
+| Stores | Relationship stage, interaction count, self-described notes, person profile | Raw messages and basic statistics |
+| Scope | Per session + per personId | Per senderId, merged across groups and private chats |
+| Purpose | Remember "what we talked about" | Let `qqbot_view_person` look up previous messages on demand |
+| Storage | `memory.onebot.json` | `persona-archive.json` |
 
-Memory is isolated by OneBot account namespace. The same person can still be merged into one person profile across groups and private chats.
+The archive does no background personality analysis and is not injected into the prompt. It is read only when the model calls `qqbot_view_person`. Memory is isolated by OneBot account namespace; the same person can still be merged into one person profile across groups and private chats.
 
 ### 5. Proactive group chat
 
@@ -242,7 +242,7 @@ Middleware order (`src/gateway/middleware-setup.ts`):
 2. `messageFilter` — bot echoes / deduplication
 3. `accessPolicy` — private/group access control
 4. `historyBuffer` — group history buffer (before mention gate; non-mention messages count)
-5. `personaArchive` — member profile archive (optional)
+5. `personaArchive` — member message archive (data source for `qqbot_view_person`)
 6. `quoteRef` — quote resolution/indexing
 7. `attachmentProcessor` (current message) — media download
 8. `historyMedia` — backfill media paths into history
@@ -291,6 +291,7 @@ The plugin appends sections through `system-prompt/assemble`, merged by order:
 | 85 | Persona prompt + kaomoji | `personas[]` |
 | 86 | Persona tool allowlist | `personas[].tools` |
 | 86.5 | Vision instructions | `vision.enabled` |
+| 86.8 | Member archive lookup instructions | `personaAnalysis.enabled` |
 | 87 | Session memory + person profile | `memory` |
 | 88 | Voice reply instructions | `voice` |
 | 89 | Sticker instructions | `sticker` |
@@ -430,19 +431,17 @@ memory:
 - Relationship stages are derived from interaction count: new (<5) → familiar face (<20) → familiar (<60) → close (<200) → very close.
 - `/memory` is admin-only: view, `add`, `del`, `clear`.
 
-### Member profiles
+### Member archive
 
 ```yaml
 personaAnalysis:
   enabled: true
   maxMessages: 300
   retentionDays: 30
-  autoAnalyze: true
-  autoAnalyzeThreshold: 20
 ```
 
-- Data stays local: raw messages in `persona-archive.json`, analysis results in `persona-profiles.json`.
-- Automatic analysis is queued per personId, with a 10-minute failure cooldown and a 120-second timeout; it never blocks replies.
+- Data stays local in `persona-archive.json`; there is no background analysis and no personality profile.
+- The model calls `qqbot_view_person` when it needs a member's message count, chat distribution, or recent messages. Owners/admins can specify a nickname or QQ number to look up someone else.
 - Recording happens after access control and before the mention gate, so non-mention group messages are archived without triggering a reply.
 - Only messages delivered by OneBot can be archived. If your implementation only forwards mentions, other group chat will not appear.
 
@@ -515,7 +514,6 @@ voice:
 | `/model` | View or switch model | Admin |
 | `/preset` | View or switch agent preset | Admin |
 | `/persona` | View or switch persona; `default` follows the default, `off` disables it for this session | Admin |
-| `/persona-analysis` | Analyze the mentioned group member; a nickname or QQ number also works | Admin |
 | `/tools` | Diagnose persona tool bindings and host tool availability | Admin |
 | `/memory` | View or manage long-term memory for this session | Admin |
 | `/whoami` | Show the current QQ number / group number and identity | Everyone |
@@ -529,7 +527,7 @@ voice:
 
 Default allowlist:
 
-- Plugin tools: `qqbot_solve`, `qqbot_describe_image`, `qqbot_send_file`, `qqbot_translate`, `qqbot_summarize`, `qqbot_explain`, `qqbot_rewrite`, `qqbot_analyze_persona`, `qqbot_pick_sticker`, `qqbot_save_sticker`, `qqbot_send_sticker`, `qqbot_list_stickers`, `qqbot_update_sticker`
+- Plugin tools: `qqbot_solve`, `qqbot_describe_image`, `qqbot_send_file`, `qqbot_translate`, `qqbot_summarize`, `qqbot_explain`, `qqbot_rewrite`, `qqbot_view_person`, `qqbot_pick_sticker`, `qqbot_save_sticker`, `qqbot_send_sticker`, `qqbot_list_stickers`, `qqbot_update_sticker`
 - Management tool: `qqbot_control` (owner/admin can change personas, memory, and sessions in natural language)
 - Host read-only capabilities: `ask_user_question`, `web_search`, `web_fetch`
 
@@ -545,8 +543,7 @@ All under `~/.dsh-qqbot/` by default:
 | `identities.json` | Identity aliases for one person across sender ids |
 | `names.json` | Bot self-name / QQ nickname |
 | `model-prefs.json` | Per-peer model / preset / persona / sessionId |
-| `persona-archive.json` | Group/private message archive |
-| `persona-profiles.json` | Analysis results |
+| `persona-archive.json` | Group/private message archive (data source for `qqbot_view_person`) |
 | `stickers.json` | Sticker metadata |
 | `workspace/` | Default agent working directory |
 | `media/` | Temporary media (cleaned by TTL) |
@@ -582,7 +579,7 @@ Conventions:
 |---------|-------------|
 | No response in private or group chat | Is OneBot running? Do HTTP/WS ports and tokens match? Is `onebot.selfId` correct? Did the plugin connect in the logs? |
 | Mentioned in a group but no reply | `requireMention`, access control, whether the bot was actually mentioned, and whether `mentionGate` blocked it in the logs |
-| Member profiles are incomplete | Does OneBot deliver non-mention group messages? Check NapCat / LLOneBot group message reporting settings |
+| Member archive is missing or sparse | Does OneBot deliver non-mention group messages? Check NapCat / LLOneBot group message reporting and `personaAnalysis.enabled` |
 | Proactive chat never triggers | Are non-mention messages received? Is `proactive.enabled` true? Probability, cooldown, hourly/daily quotas may block it; the model may also choose silence |
 | `/whoami` does not match the configured QQ number | Use the id printed by `/whoami`; in most implementations private and group sender ids are both QQ numbers |
 | Memory looks mixed up or partially missing | Did `selfId` change? Different OneBot accounts use different namespaces and storage |

@@ -18,7 +18,7 @@ import type { MediaSenderLike } from '../media/send-media.ts';
 import { decodeButtonData } from '../features/button-utils.ts';
 import { buildUserAgent } from '../shared/index.ts';
 import { setupMiddlewares } from './middleware-setup.ts';
-import type { PersonaRuntime } from './persona-runtime.ts';
+import type { ArchiveRuntime } from './archive-runtime.ts';
 import type { GatewayTransport } from './transport.ts';
 
 /**
@@ -40,11 +40,11 @@ export interface OfficialTransportDeps {
   config: ImQQBotConfig;
   manager: SessionManager;
   logger: Logger;
-  persona: PersonaRuntime;
+  archive: ArchiveRuntime;
 }
 
 export function createOfficialTransport(deps: OfficialTransportDeps): GatewayTransport {
-  const { config, manager, logger, persona } = deps;
+  const { config, manager, logger, archive } = deps;
 
   // ── 初始化 QQ Bot SDK ──
   const userAgent = buildUserAgent();
@@ -60,11 +60,7 @@ export function createOfficialTransport(deps: OfficialTransportDeps): GatewayTra
   logger.info(`QQBot SDK initialized (UA: ${userAgent})`);
 
   // ── 中间件链 ──
-  setupMiddlewares(
-    bot, config, manager, logger, persona.archive,
-    persona.autoAnalyzer === undefined ? undefined : (notice) => persona.autoAnalyzer?.notify(notice),
-    persona.services,
-  );
+  setupMiddlewares(bot, config, manager, logger, archive.archive);
 
   // ── 入站：经过中间件链后的消息交给 dsh agent ──
   bot.on('message', async (mCtx: MiddlewareContext) => {

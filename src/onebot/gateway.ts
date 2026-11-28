@@ -12,7 +12,7 @@ import type { Logger } from '../types.ts';
 import type { GatewayTransport } from '../gateway/transport.ts';
 import { buildMiddlewares } from '../gateway/middleware-setup.ts';
 import { handleInbound } from '../transport/inbound.ts';
-import type { PersonaRuntime } from '../gateway/persona-runtime.ts';
+import type { ArchiveRuntime } from '../gateway/archive-runtime.ts';
 import { OneBotClient } from './client.ts';
 import { OneBotBot } from './sender.ts';
 import { buildInboundMessage, type OneBotInboundMessage } from './message.ts';
@@ -22,7 +22,7 @@ export interface OneBotTransportDeps {
   config: ImQQBotConfig;
   manager: SessionManager;
   logger: Logger;
-  persona: PersonaRuntime;
+  archive: ArchiveRuntime;
 }
 
 /** 构造与 SDK createMiddlewareContext 等价的上下文（SDK 未导出该工厂） */
@@ -71,7 +71,7 @@ function createContext(
 
 /** 创建 OneBot 传输层（未连接，start() 时才建立 WS） */
 export function createOneBotTransport(deps: OneBotTransportDeps): GatewayTransport {
-  const { config, manager, logger, persona } = deps;
+  const { config, manager, logger, archive } = deps;
 
   let selfId = config.onebot.selfId.trim();
   let middlewares: Middleware[] = [];
@@ -100,9 +100,7 @@ export function createOneBotTransport(deps: OneBotTransportDeps): GatewayTranspo
     config,
     manager,
     logger,
-    ...(persona.archive !== undefined ? { personaArchive: persona.archive } : {}),
-    ...(persona.autoAnalyzer !== undefined ? { onArchived: (notice) => persona.autoAnalyzer?.notify(notice) } : {}),
-    ...(persona.services !== undefined ? { personaServices: persona.services } : {}),
+    ...(archive.archive !== undefined ? { personaArchive: archive.archive } : {}),
     allowInsecureMedia: true,
   });
 
