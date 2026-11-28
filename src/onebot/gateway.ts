@@ -16,7 +16,6 @@ import type { ArchiveRuntime } from '../gateway/archive-runtime.ts';
 import { OneBotClient } from './client.ts';
 import { OneBotBot } from './sender.ts';
 import { buildInboundMessage, type OneBotInboundMessage } from './message.ts';
-import { handlePokeSignal } from '../transport/poke.ts';
 import type { OneBotEvent, OneBotMessageDetail, OneBotMessageEvent } from './types.ts';
 
 /** 同一会话内两次自动回戳的最小间隔，避免互戳刷屏 */
@@ -120,25 +119,16 @@ export function createOneBotTransport(deps: OneBotTransportDeps): GatewayTranspo
 
   /** 每个会话最近一次自动回戳的时间 */
   const lastPokeBackAt = new Map<string, number>();
-  /** 每个会话最近一条普通消息的时间：用来判断戳一戳有没有「上文」 */
-  const lastMessageAt = new Map<string, number>();
-  /** 等待中的戳一戳：连续戳只保留一个定时器，最终只回一次 */
-  const pendingPokes = new Map<string, {
-    timer: ReturnType<typeof setTimeout>;
-    count: number;
-    userId: string;
-    groupId: string;
-    senderName?: string;
-  }>();
-  /** 正在处理中的戳一戳，避免同一会话并发开新轮 */
-  const pokeInFlight = new Set<string>();
-  /** 戳完后先等一会儿：对方可能马上把真正要说的话发出来 */
-  const POKE_WAIT_MS = 6_000;
-  /** 最近这么久内有消息才算「有上文」 */
-  const POKE_CONTEXT_WINDOW_MS = 5 * 60_000;
+  /**
+   * 戳完之后等「对方的下一条消息」，不设固定的 6 秒回复：等到就正常回应，
+   * 等不到就什么都不发。连续戳只保留一个等待项，避免回多次。
+   */
+  const POKE_REPLY_WINDOW_MS = 5 * 60_000;
+  /** key → 被戳的人与截止时间：只认被戳者自己发来的下一条消息 */
+  const pokeReplyPending = new Map<string, { userId: string; deadline: number }>();
 
   /**
-   * 戳一戳：视情况回戳一下，同时当作「主动消息信号」投给模型。
+   * 戳一戳：回戳一下，然后等对方的下一条消息。
    *
    * NapCat / LLOneBot 的字段：`notice_type=notify, sub_type=poke`，
    * 被戳对象在 `target_id`；部分实现用 `notice_type=poke`，这里都兼容。
@@ -160,8 +150,13 @@ export function createOneBotTransport(deps: OneBotTransportDeps): GatewayTranspo
     const peerId = groupId !== '' ? groupId : userId;
     const key = `${scope}:${peerId}`;
 
-    // 回击一个戳一戳（带冷却）：这是「视情况」的最低成本回应
     const now = Date.now();
+    // 记下「刚戳过，接下来你发的那条消息大概率是跟我说的」；
+    // 不启动定时器，也不主动发消息——只在对方下一条消息到来时消费。
+    pokeReplyPending.set(key, { userId, deadline: now + POKE_REPLY_WINDOW_MS });
+    logger.debug(`im-qqbot: poke 等待对方下一条消息 ${key} user=${userId}`);
+
+    // 回击一个戳一戳（带冷却）：这是「视情况」的最低成本回应
     if (now - (lastPokeBackAt.get(key) ?? 0) >= POKE_BACK_COOLDOWN_MS) {
       lastPokeBackAt.set(key, now);
       const params: Record<string, unknown> = {};
@@ -174,82 +169,28 @@ export function createOneBotTransport(deps: OneBotTransportDeps): GatewayTranspo
         logger.debug(`im-qqbot: send_poke 失败 ${key}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-
-    // 不立刻触发模型：先等一会儿，看对方会不会把真正要说的话发出来。
-    // 连续戳多次只保留一个待处理项，最终只回其中一次。
-    const existing = pendingPokes.get(key);
-    if (existing !== undefined) {
-      existing.count += 1;
-      existing.userId = userId;
-      existing.groupId = groupId;
-      return;
-    }
-    const sender = event.sender as { nickname?: unknown } | undefined;
-    const senderName = typeof sender?.nickname === 'string' && sender.nickname.trim() !== ''
-      ? sender.nickname
-      : undefined;
-    const pending = {
-      timer: setTimeout(() => {
-        void firePoke(key).catch((err: unknown) => {
-          logger.warn(`poke turn failed: ${err instanceof Error ? err.message : String(err)}`);
-        });
-      }, POKE_WAIT_MS),
-      count: 1,
-      userId,
-      groupId,
-      ...(senderName !== undefined ? { senderName } : {}),
-    };
-    (pending.timer as { unref?: () => void }).unref?.();
-    pendingPokes.set(key, pending);
   }
 
   /**
-   * 戳一戳的延时处理：
-   * - 这段时间里对方发了消息 → 定时器已被取消（那条消息才是要回应的）；
-   * - 没有上文（最近 5 分钟没消息）→ 不回应，等对方的下一条消息；
-   * - 有上文 → 投给模型，让它结合聊天记录决定接话还是 [SILENT]。
+   * 收到普通消息：返回这条消息是否是被戳者发来的「戳的后续」。
+   *
+   * 只认被戳者本人的下一条消息；其他人先说话不会消费这次等待，
+   * 避免把别人的闲聊当成对戳的回应。
    */
-  async function firePoke(key: string): Promise<void> {
-    const pending = pendingPokes.get(key);
-    if (pending === undefined) return;
-    pendingPokes.delete(key);
-
-    const now = Date.now();
-    if (now - (lastMessageAt.get(key) ?? 0) > POKE_CONTEXT_WINDOW_MS) {
-      logger.info(`im-qqbot: poke 无上文，等对方下一条消息 ${key}`);
-      return;
-    }
-    if (pokeInFlight.has(key)) return;
-    pokeInFlight.add(key);
-    try {
-      await handlePokeSignal(manager, config, logger, {
-        scope: pending.groupId !== '' ? 'group' : 'c2c',
-        peerId: pending.groupId !== '' ? pending.groupId : pending.userId,
-        senderId: pending.userId,
-        ...(pending.senderName !== undefined ? { senderName: pending.senderName } : {}),
-        replyTarget: {
-          scope: pending.groupId !== '' ? 'group' : 'c2c',
-          targetId: pending.groupId !== '' ? pending.groupId : pending.userId,
-          channel: 'onebot',
-        },
-      });
-    } finally {
-      pokeInFlight.delete(key);
-    }
-  }
-
-  /** 收到普通消息：记录活跃时间，并取消该会话等待中的戳一戳回应 */
-  function noteMessageActivity(event: OneBotMessageEvent): void {
+  function noteMessageActivity(event: OneBotMessageEvent): boolean {
     const groupId = event.group_id !== undefined ? String(event.group_id) : '';
     const userId = event.user_id !== undefined ? String(event.user_id) : '';
     const key = groupId !== '' ? `group:${groupId}` : `c2c:${userId}`;
-    lastMessageAt.set(key, Date.now());
-    const pending = pendingPokes.get(key);
-    if (pending !== undefined) {
-      clearTimeout(pending.timer);
-      pendingPokes.delete(key);
-      logger.debug(`im-qqbot: 戳一戳等待被消息取消 ${key}`);
+
+    const pending = pokeReplyPending.get(key);
+    if (pending === undefined) return false;
+    if (pending.deadline < Date.now()) {
+      pokeReplyPending.delete(key);
+      return false;
     }
+    if (pending.userId !== userId) return false;
+    pokeReplyPending.delete(key);
+    return true;
   }
 
   async function handleEvent(event: OneBotEvent): Promise<void> {
@@ -265,7 +206,7 @@ export function createOneBotTransport(deps: OneBotTransportDeps): GatewayTranspo
     }
     const messageEvent = event as OneBotMessageEvent;
     if (messageEvent.user_id !== undefined && String(messageEvent.user_id) === selfId) return;
-    noteMessageActivity(messageEvent);
+    const pokeFollowUp = noteMessageActivity(messageEvent);
 
     const built = await buildInboundMessage(messageEvent, {
       selfId,
@@ -273,6 +214,10 @@ export function createOneBotTransport(deps: OneBotTransportDeps): GatewayTranspo
       getMessage,
     });
     if (built === undefined) return;
+    if (pokeFollowUp) {
+      // 旁听链路会读取这个标记：戳完后的第一条消息直接当「在跟机器人说」
+      (built.message as unknown as { pokeFollowUp?: boolean }).pokeFollowUp = true;
+    }
 
     const ctx = createContext(bot, built.message, logger);
     if (built.quote !== undefined) {
