@@ -120,11 +120,22 @@ export function createOneBotTransport(deps: OneBotTransportDeps): GatewayTranspo
 
   /** 每个会话最近一次自动回戳的时间 */
   const lastPokeBackAt = new Map<string, number>();
-  /** 每个会话最近一次把戳一戳投给模型的时间（连续互戳不重复开新轮） */
-  const lastPokeSignalAt = new Map<string, number>();
-  /** 正在处理中的戳一戳，避免同一会话并发触发多轮 */
+  /** 每个会话最近一条普通消息的时间：用来判断戳一戳有没有「上文」 */
+  const lastMessageAt = new Map<string, number>();
+  /** 等待中的戳一戳：连续戳只保留一个定时器，最终只回一次 */
+  const pendingPokes = new Map<string, {
+    timer: ReturnType<typeof setTimeout>;
+    count: number;
+    userId: string;
+    groupId: string;
+    senderName?: string;
+  }>();
+  /** 正在处理中的戳一戳，避免同一会话并发开新轮 */
   const pokeInFlight = new Set<string>();
-  const POKE_SIGNAL_COOLDOWN_MS = 5_000;
+  /** 戳完后先等一会儿：对方可能马上把真正要说的话发出来 */
+  const POKE_WAIT_MS = 6_000;
+  /** 最近这么久内有消息才算「有上文」 */
+  const POKE_CONTEXT_WINDOW_MS = 5 * 60_000;
 
   /**
    * 戳一戳：视情况回戳一下，同时当作「主动消息信号」投给模型。
@@ -164,25 +175,80 @@ export function createOneBotTransport(deps: OneBotTransportDeps): GatewayTranspo
       }
     }
 
-    // 同时触发模型：让它可以补一句话，也可以只戳回去 / 沉默
+    // 不立刻触发模型：先等一会儿，看对方会不会把真正要说的话发出来。
+    // 连续戳多次只保留一个待处理项，最终只回其中一次。
+    const existing = pendingPokes.get(key);
+    if (existing !== undefined) {
+      existing.count += 1;
+      existing.userId = userId;
+      existing.groupId = groupId;
+      return;
+    }
+    const sender = event.sender as { nickname?: unknown } | undefined;
+    const senderName = typeof sender?.nickname === 'string' && sender.nickname.trim() !== ''
+      ? sender.nickname
+      : undefined;
+    const pending = {
+      timer: setTimeout(() => {
+        void firePoke(key).catch((err: unknown) => {
+          logger.warn(`poke turn failed: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      }, POKE_WAIT_MS),
+      count: 1,
+      userId,
+      groupId,
+      ...(senderName !== undefined ? { senderName } : {}),
+    };
+    (pending.timer as { unref?: () => void }).unref?.();
+    pendingPokes.set(key, pending);
+  }
+
+  /**
+   * 戳一戳的延时处理：
+   * - 这段时间里对方发了消息 → 定时器已被取消（那条消息才是要回应的）；
+   * - 没有上文（最近 5 分钟没消息）→ 不回应，等对方的下一条消息；
+   * - 有上文 → 投给模型，让它结合聊天记录决定接话还是 [SILENT]。
+   */
+  async function firePoke(key: string): Promise<void> {
+    const pending = pendingPokes.get(key);
+    if (pending === undefined) return;
+    pendingPokes.delete(key);
+
+    const now = Date.now();
+    if (now - (lastMessageAt.get(key) ?? 0) > POKE_CONTEXT_WINDOW_MS) {
+      logger.info(`im-qqbot: poke 无上文，等对方下一条消息 ${key}`);
+      return;
+    }
     if (pokeInFlight.has(key)) return;
-    if (now - (lastPokeSignalAt.get(key) ?? 0) < POKE_SIGNAL_COOLDOWN_MS) return;
-    lastPokeSignalAt.set(key, now);
     pokeInFlight.add(key);
     try {
-      const sender = event.sender as { nickname?: unknown } | undefined;
-      const senderName = typeof sender?.nickname === 'string' && sender.nickname.trim() !== ''
-        ? sender.nickname
-        : undefined;
       await handlePokeSignal(manager, config, logger, {
-        scope,
-        peerId,
-        senderId: userId,
-        ...(senderName !== undefined ? { senderName } : {}),
-        replyTarget: { scope, targetId: peerId, channel: 'onebot' },
+        scope: pending.groupId !== '' ? 'group' : 'c2c',
+        peerId: pending.groupId !== '' ? pending.groupId : pending.userId,
+        senderId: pending.userId,
+        ...(pending.senderName !== undefined ? { senderName: pending.senderName } : {}),
+        replyTarget: {
+          scope: pending.groupId !== '' ? 'group' : 'c2c',
+          targetId: pending.groupId !== '' ? pending.groupId : pending.userId,
+          channel: 'onebot',
+        },
       });
     } finally {
       pokeInFlight.delete(key);
+    }
+  }
+
+  /** 收到普通消息：记录活跃时间，并取消该会话等待中的戳一戳回应 */
+  function noteMessageActivity(event: OneBotMessageEvent): void {
+    const groupId = event.group_id !== undefined ? String(event.group_id) : '';
+    const userId = event.user_id !== undefined ? String(event.user_id) : '';
+    const key = groupId !== '' ? `group:${groupId}` : `c2c:${userId}`;
+    lastMessageAt.set(key, Date.now());
+    const pending = pendingPokes.get(key);
+    if (pending !== undefined) {
+      clearTimeout(pending.timer);
+      pendingPokes.delete(key);
+      logger.debug(`im-qqbot: 戳一戳等待被消息取消 ${key}`);
     }
   }
 
@@ -199,6 +265,7 @@ export function createOneBotTransport(deps: OneBotTransportDeps): GatewayTranspo
     }
     const messageEvent = event as OneBotMessageEvent;
     if (messageEvent.user_id !== undefined && String(messageEvent.user_id) === selfId) return;
+    noteMessageActivity(messageEvent);
 
     const built = await buildInboundMessage(messageEvent, {
       selfId,
