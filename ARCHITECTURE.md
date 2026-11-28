@@ -209,7 +209,15 @@ OneBot 的 `accessToken` 等连接信息写入 profile 的 `cordis.patch.yml`，
 
 ## 9. 三个横切特性
 
-### 9.1 群聊主动发言
+### 9.1 群聊主动发言 / 戳一戳
+
+未 @ 的消息如果看起来在问机器人（`features/proactive.ts` 的 `isDirectedAtBot`：第二人称 + 疑问、
+引用机器人消息、或「在吗」这类召唤），先由 `ProactiveJudge.replyChance` 让模型给出 0-1 的回复
+合适程度：≥0.5 时跳过概率/冷却/插话判断直接回复（`runDirectedTurn`），<0.5 落回普通旁听。
+这样既避免「群里明明在问它却不吭声」，也不会把旁人的对话全接过来。
+
+`onebot/gateway.ts` 还会处理 `notice` 事件里的戳一戳：被戳时先自动回戳（10 秒冷却），
+再通过 `transport/poke.ts` 投递一次「【戳一戳】…」的 followup，让模型决定接话还是 `[SILENT]`。
 
 ```
 transport/ambient.ts       计时、批次、上下文、模型调用

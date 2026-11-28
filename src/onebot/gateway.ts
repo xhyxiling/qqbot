@@ -16,7 +16,11 @@ import type { ArchiveRuntime } from '../gateway/archive-runtime.ts';
 import { OneBotClient } from './client.ts';
 import { OneBotBot } from './sender.ts';
 import { buildInboundMessage, type OneBotInboundMessage } from './message.ts';
+import { handlePokeSignal } from '../transport/poke.ts';
 import type { OneBotEvent, OneBotMessageDetail, OneBotMessageEvent } from './types.ts';
+
+/** 同一会话内两次自动回戳的最小间隔，避免互戳刷屏 */
+const POKE_BACK_COOLDOWN_MS = 10_000;
 
 export interface OneBotTransportDeps {
   config: ImQQBotConfig;
@@ -114,7 +118,79 @@ export function createOneBotTransport(deps: OneBotTransportDeps): GatewayTranspo
     }
   }
 
+  /** 每个会话最近一次自动回戳的时间 */
+  const lastPokeBackAt = new Map<string, number>();
+  /** 每个会话最近一次把戳一戳投给模型的时间（连续互戳不重复开新轮） */
+  const lastPokeSignalAt = new Map<string, number>();
+  /** 正在处理中的戳一戳，避免同一会话并发触发多轮 */
+  const pokeInFlight = new Set<string>();
+  const POKE_SIGNAL_COOLDOWN_MS = 5_000;
+
+  /**
+   * 戳一戳：视情况回戳一下，同时当作「主动消息信号」投给模型。
+   *
+   * NapCat / LLOneBot 的字段：`notice_type=notify, sub_type=poke`，
+   * 被戳对象在 `target_id`；部分实现用 `notice_type=poke`，这里都兼容。
+   */
+  async function handlePoke(event: OneBotEvent): Promise<void> {
+    const noticeType = String(event.notice_type ?? '');
+    const subType = String(event.sub_type ?? '');
+    if (noticeType !== 'poke' && !(noticeType === 'notify' && subType === 'poke')) return;
+    if (selfId === '') return;
+
+    const userId = event.user_id !== undefined ? String(event.user_id) : '';
+    const targetId = event.target_id !== undefined ? String(event.target_id) : '';
+    // 只处理「别人戳机器人」；自己戳自己 / 戳别人一律忽略
+    if (userId === '' || userId === selfId) return;
+    if (targetId !== '' && targetId !== selfId) return;
+
+    const groupId = event.group_id !== undefined ? String(event.group_id) : '';
+    const scope = groupId !== '' ? 'group' : 'c2c';
+    const peerId = groupId !== '' ? groupId : userId;
+    const key = `${scope}:${peerId}`;
+
+    // 回击一个戳一戳（带冷却）：这是「视情况」的最低成本回应
+    const now = Date.now();
+    if (now - (lastPokeBackAt.get(key) ?? 0) >= POKE_BACK_COOLDOWN_MS) {
+      lastPokeBackAt.set(key, now);
+      const params: Record<string, unknown> = {};
+      if (groupId !== '') params.group_id = /^\d+$/.test(groupId) ? Number(groupId) : groupId;
+      params.user_id = /^\d+$/.test(userId) ? Number(userId) : userId;
+      try {
+        await client.call('send_poke', params);
+        logger.info(`im-qqbot: poke back → ${key} user=${userId}`);
+      } catch (err) {
+        logger.debug(`im-qqbot: send_poke 失败 ${key}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    // 同时触发模型：让它可以补一句话，也可以只戳回去 / 沉默
+    if (pokeInFlight.has(key)) return;
+    if (now - (lastPokeSignalAt.get(key) ?? 0) < POKE_SIGNAL_COOLDOWN_MS) return;
+    lastPokeSignalAt.set(key, now);
+    pokeInFlight.add(key);
+    try {
+      const sender = event.sender as { nickname?: unknown } | undefined;
+      const senderName = typeof sender?.nickname === 'string' && sender.nickname.trim() !== ''
+        ? sender.nickname
+        : undefined;
+      await handlePokeSignal(manager, config, logger, {
+        scope,
+        peerId,
+        senderId: userId,
+        ...(senderName !== undefined ? { senderName } : {}),
+        replyTarget: { scope, targetId: peerId, channel: 'onebot' },
+      });
+    } finally {
+      pokeInFlight.delete(key);
+    }
+  }
+
   async function handleEvent(event: OneBotEvent): Promise<void> {
+    if (event.post_type === 'notice') {
+      await handlePoke(event);
+      return;
+    }
     if (event.post_type !== 'message') return;
 
     // selfId 未配置时用事件自带字段兜底（OneBot 事件都带 self_id）

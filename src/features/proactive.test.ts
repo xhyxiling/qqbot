@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ProactiveConfig } from '../config.ts';
 import {
   createProactiveState,
+  isDirectedAtBot,
   isProactiveCandidate,
   noteActivity,
   noteSpoke,
@@ -40,6 +41,24 @@ describe('proactive candidate', () => {
     expect(isProactiveCandidate('/memory', config)).toBe(false);
     expect(isProactiveCandidate('#话题', config)).toBe(false);
     expect(isProactiveCandidate('嗯', config)).toBe(false);
+  });
+});
+
+describe('directed at bot', () => {
+  it('第二人称 + 疑问算直接询问', () => {
+    expect(isDirectedAtBot('那你现在是什么人格，你知道吗')).toBe(true);
+    expect(isDirectedAtBot('你还记得昨天说的吗')).toBe(true);
+    expect(isDirectedAtBot('你能帮我查一下吗？')).toBe(true);
+  });
+
+  it('召唤 / 问句但旁人说第三人称不算', () => {
+    expect(isDirectedAtBot('在吗')).toBe(true);
+    expect(isDirectedAtBot('他在干嘛')).toBe(false);
+    expect(isDirectedAtBot('今天天气不错')).toBe(false);
+  });
+
+  it('提到机器人昵称也算', () => {
+    expect(isDirectedAtBot('小泠今天话好多', ['小泠'])).toBe(true);
   });
 });
 

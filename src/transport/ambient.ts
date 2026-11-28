@@ -25,6 +25,7 @@ import { buildIdentityPrefix } from '../identity/role.ts';
 import { shortSenderId } from '../shared/utils.ts';
 import {
   createProactiveState,
+  isDirectedAtBot,
   isProactiveCandidate,
   noteActivity,
   noteSpoke,
@@ -63,6 +64,8 @@ interface ProactiveRuntime {
   state: ProactiveState;
   /** 最近一段群聊（内存里保留最近 12 条），给模型判断是不是两人对话 */
   recent: ProactiveBatchItem[];
+  /** 上次直接回应「明显在问机器人」的时间，避免连发时开多轮 */
+  lastDirectedAt?: number;
   pending?: {
     timer: ReturnType<typeof setTimeout>;
     messages: ProactiveBatchItem[];
@@ -172,11 +175,79 @@ function considerProactive(args: {
   if (runtime.recent.length > 12) runtime.recent.shift();
 
   if (!isProactiveCandidate(content, cfg)) return;
-  // @ 了别人 / 在回复别人：不插嘴
+  // @ 了别人：不插嘴
   if (Array.isArray(msg.mentions) && msg.mentions.length > 0) return;
-  if (state.quote?.entry?.senderId !== undefined) return;
   const selfId = config.onebot?.selfId?.trim() ?? '';
   if (selfId !== '' && msg.senderId === selfId) return;
+  // 引用了机器人 = 明确在跟机器人说话；引用别人则不插嘴
+  const quotedSelf = state.quote?.entry?.senderId !== undefined
+    && selfId !== ''
+    && state.quote.entry.senderId === selfId;
+  if (state.quote?.entry?.senderId !== undefined && !quotedSelf) return;
+
+  // 明显在问机器人（第二人称 + 疑问 / 引用机器人 / 召唤）：
+  // 先让模型判断回复合适程度，>=50% 才跳过概率/冷却直接回。
+  if (quotedSelf || isDirectedAtBot(content)) {
+    const recent = [...runtime.recent];
+    void considerDirected({ manager, config, logger, runtime, item, recent, replyTarget }).catch((err) => {
+      logger.warn(`directed turn failed: ${err instanceof Error ? err.message : String(err)}`);
+    });
+    return;
+  }
+
+  scheduleBatch({ manager, config, logger, runtime, item, replyTarget });
+}
+
+/**
+ * 「明显在问机器人」的模型判断：>=0.5 直接回复（不受概率/冷却限制），
+ * 低于 0.5 落回普通旁听的 6% 概率与冷却。
+ */
+async function considerDirected(args: {
+  manager: SessionManager;
+  config: ImQQBotConfig;
+  logger: Logger;
+  runtime: ProactiveRuntime;
+  item: ProactiveBatchItem;
+  recent: readonly ProactiveBatchItem[];
+  replyTarget: ReplyTarget;
+}): Promise<void> {
+  const { manager, config, logger, runtime, item, recent, replyTarget } = args;
+  const chance = await manager.judgeDirectedReply(
+    { recent, batch: [item] },
+    'group',
+    replyTarget.targetId,
+  );
+  logger.info(
+    `directed judge: chance=${chance.toFixed(2)} group=${replyTarget.targetId} sender=${item.senderId}`,
+  );
+
+  if (chance >= 0.5) {
+    // 连续追问时只开一轮，避免同一句话被回多次
+    if (Date.now() - (runtime.lastDirectedAt ?? 0) < 3_000) return;
+    runtime.lastDirectedAt = Date.now();
+    if (runtime.pending !== undefined) {
+      clearTimeout(runtime.pending.timer);
+      runtime.pending = undefined;
+    }
+    await runDirectedTurn(manager, config, logger, item, recent, replyTarget);
+    return;
+  }
+
+  scheduleBatch({ manager, config, logger, runtime, item, replyTarget });
+}
+
+/** 普通旁听：进入 debounce 批次，由概率/冷却/配额决定是否发言 */
+function scheduleBatch(args: {
+  manager: SessionManager;
+  config: ImQQBotConfig;
+  logger: Logger;
+  runtime: ProactiveRuntime;
+  item: ProactiveBatchItem;
+  replyTarget: ReplyTarget;
+}): void {
+  const { manager, config, logger, runtime, item, replyTarget } = args;
+  const cfg = config.proactive;
+  if (cfg?.enabled !== true) return;
 
   if (runtime.pending !== undefined) {
     runtime.pending.messages.push(item);
@@ -201,7 +272,7 @@ function considerProactive(args: {
     timer,
     messages: [item],
     replyTarget,
-    senderId: msg.senderId,
+    senderId: item.senderId,
   };
 }
 
@@ -276,6 +347,47 @@ async function runProactiveTurn(
   });
   record.agent.followup(message);
   logger.info(`proactive → followup: group=${pending.replyTarget.targetId}`);
+  await record.agent.whenIdle();
+}
+
+/**
+ * 明显在问机器人（没 @ 但第二人称 + 疑问，或引用了机器人）：
+ * 跳过概率、冷却和「插话会不会打断别人」的判断，直接正常回复。
+ */
+async function runDirectedTurn(
+  manager: SessionManager,
+  config: ImQQBotConfig,
+  logger: Logger,
+  item: ProactiveBatchItem,
+  recent: readonly ProactiveBatchItem[],
+  replyTarget: ReplyTarget,
+): Promise<void> {
+  const record = await manager.getOrCreate('group', replyTarget.targetId, item.senderId, replyTarget);
+  record.lastUserText = item.content;
+  delete record.voiceRequested;
+  delete record.voiceInstruction;
+  delete record.stickerDescTokens;
+
+  const name = item.senderName ?? shortSenderId(item.senderId);
+  const identity = buildIdentityPrefix(item.senderId, config.identity);
+  const before = recent
+    .filter((entry) => entry !== item)
+    .slice(-4)
+    .map((entry) => `${entry.senderName ?? shortSenderId(entry.senderId)}: ${entry.content}`);
+  const body = [
+    `【群里有人直接跟你说】${identity}${name}: ${item.content}`,
+    ...(before.length > 0 ? ['', '前几句（仅作语境，不必逐条回应）：', ...before] : []),
+    '',
+    '这条没有 @ 你，但明显是在问你。正常回答，1-2 句，别长篇、别客服腔。',
+    '不想接就只输出 [SILENT]。',
+  ].join('\n');
+
+  const message = createUserMessage({
+    content: [{ type: 'text' as const, text: body }],
+    source: { kind: 'user' as const },
+  });
+  record.agent.followup(message);
+  logger.info(`directed → followup: group=${replyTarget.targetId} sender=${item.senderId}`);
   await record.agent.whenIdle();
 }
 

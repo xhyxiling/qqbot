@@ -749,6 +749,21 @@ export class SessionManager {
     return this.proactiveJudge.shouldSpeak(scope, peerId, input);
   }
 
+  /**
+   * 没 @ 但明显在问机器人时：让模型判断回复合适程度（0-1）。
+   * >=0.5 由调用方跳过概率/冷却直接回复；模型判断关闭时按 1（沿用原有行为）。
+   */
+  async judgeDirectedReply(
+    input: ProactiveJudgeInput,
+    scope: ChatScope,
+    peerId: string,
+  ): Promise<number> {
+    if (this.config.proactive?.enabled !== true) return 0;
+    if (this.config.proactive.modelJudge !== true) return 1;
+    if (this.proactiveJudge === undefined) return 1;
+    return this.proactiveJudge.replyChance(scope, peerId, input);
+  }
+
   /** 手动给某人画像加一条要点；记忆关闭或内容重复时返回 undefined */
   addPersonNote(senderId: string, text: string, channel?: ChannelKind): MemoryNote | undefined {
     if (!this.memoryEnabled) return undefined;
