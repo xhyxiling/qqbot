@@ -278,6 +278,53 @@ describe('OutboundRouter: 回复拆分', () => {
   });
 });
 
+describe('OutboundRouter: 工具步骤正文不单独发送', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const turnEnd = { type: 'turn/end', data: { reason: { kind: 'stop' } } };
+
+  it('工具步骤有正文、后面还有纯文本回复：只发最终回复', async () => {
+    const { outbound, bot } = setup({ record: createRecord(groupTarget) });
+
+    outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, {
+      type: 'assistant/message',
+      data: { message: { content: [
+        { type: 'text', text: '过程里的一句话' },
+        { type: 'tool-call', name: 'qqbot_send_sticker' },
+      ] } },
+    });
+    outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, {
+      type: 'assistant/message',
+      data: { message: { content: [{ type: 'text', text: '最终回复' }] } },
+    });
+    outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, turnEnd);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(bot.sendMarkdown).toHaveBeenCalledTimes(1);
+    expect(bot.sendMarkdown).toHaveBeenCalledWith(groupTarget, '最终回复');
+  });
+
+  it('整轮只有工具步骤正文：轮末补发一次，避免丢回复', async () => {
+    const { outbound, bot } = setup({ record: createRecord(groupTarget) });
+
+    outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, {
+      type: 'assistant/message',
+      data: { message: { content: [
+        { type: 'text', text: '只有过程正文' },
+        { type: 'tool-call', name: 'qqbot_send_sticker' },
+      ] } },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(bot.sendMarkdown).not.toHaveBeenCalled();
+
+    outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, turnEnd);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(bot.sendMarkdown).toHaveBeenCalledTimes(1);
+    expect(bot.sendMarkdown).toHaveBeenCalledWith(groupTarget, '只有过程正文');
+  });
+});
+
 describe('OutboundRouter: deliverables/presented', () => {
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
