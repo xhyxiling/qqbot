@@ -202,8 +202,15 @@ export async function handleInbound(
   });
 
   record.agent.followup(message);
-  // 正常 @ 回复也算「刚说过话」：重置冷却，并取消还没触发的旁听批次
-  if (scope === 'group') noteProactiveActivity(manager, config, peerId, replyChannel);
+  // 正常 @ 回复也算「刚说过话」：重置冷却，并取消还没触发的旁听批次；
+  // 同时记下这次直接对话，供「没 @ 但接着说」的判断使用。
+  if (scope === 'group') {
+    noteProactiveActivity(manager, config, peerId, replyChannel, {
+      senderId: msg.senderId,
+      ...(msg.senderName !== undefined ? { senderName: msg.senderName } : {}),
+      ...(msg.content !== undefined && msg.content.trim() !== '' ? { text: msg.content } : {}),
+    });
+  }
   logger.info(`→ followup sent: key=${scope}:${peerId}`);
 
   // 群消息回复后清空历史缓存（避免下次 @ 时重复组包）

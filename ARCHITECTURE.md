@@ -217,17 +217,26 @@ OneBot 的 `accessToken` 等连接信息写入 profile 的 `cordis.patch.yml`，
 概率，再按这个概率掷骰：命中就跳过 6%/冷却/插话判断直接回复（`runDirectedTurn`），没命中沉默。
 既不装死，也不会把旁人的对话全接过来。
 
+「刚跟机器人直接聊过」也算一种上文：正常 @ 回复后 `noteProactiveActivity` 会记下发起人、
+时间和那句话，并放进旁听的最近上下文。5 分钟内这个人再发未 @ 的消息，同样走
+`replyChance`（提示模型「这句大概率是接着说」），不受 6% 概率 / 冷却 / 先让别人说两句的限制。
+
 `onebot/gateway.ts` 还会处理 `notice` 事件里的戳一戳：被戳时先自动回戳（10 秒冷却），
 然后不主动发消息，只等被戳的人下一条消息（最多 5 分钟）。等到了就把这条消息标记成
-「戳的后续」，由 `transport/ambient.ts` 跳过概率/冷却直接当「在跟机器人说」正常回应；
-连续戳只保留一个等待项，只回一次。其他人先说话不会消费这次等待。
+「戳的后续」，由 `transport/ambient.ts` 跳过概率/冷却直接正常回应（提示词会带上最近群聊；
+如果刚跟他聊过，会额外提醒模型这是接着说）；连续戳只保留一个等待项，只回一次。
+其他人先说话不会消费这次等待。
 
 ```
-transport/ambient.ts       计时、批次、上下文、模型调用
+transport/ambient.ts       计时、批次、上下文、模型调用、附件路径
 features/proactive.ts      纯策略：候选过滤、概率、冷却、配额
 features/proactive-judge.ts 纯判断：两人对话/话题封闭 → speak=false
 transport/outbound.ts      [SILENT] 丢弃
 ```
+
+未 @ 消息的图片/表情包由 `attachmentProcessor` 先下载；ambient 会把本地路径（下载失败时用原始
+URL）拼进批次内容，所以主动发言和戳后续也能看到并调用 `qqbot_describe_image`，不再只剩
+`[图片]` / `[动画表情]` 占位符。
 
 调整「多久说一次」改 `features/proactive.ts`；调整「什么场合该说」改 `features/proactive-judge.ts`。
 

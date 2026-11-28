@@ -193,6 +193,20 @@ export function extractAttachments(segments: OneBotSegment[]): RawAttachment[] {
       continue;
     }
 
+    // 商城表情（表情包）：NapCat 有时会给 mface 带 url，一并当图片下载，
+    // 否则主动发言/戳后续只能看到「[动画表情]」，无法描述内容。
+    if (segment.type === 'mface') {
+      if (url !== '') {
+        attachments.push({
+          content_type: 'image/gif',
+          filename: withExtension(file, `sticker_${Date.now()}.gif`, '.gif'),
+          size: Number.isFinite(size) ? size : 0,
+          url,
+        });
+      }
+      continue;
+    }
+
     if (segment.type === 'video') {
       attachments.push({
         content_type: 'video/mp4',

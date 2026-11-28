@@ -21,7 +21,8 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import type { SessionManager } from '../session/index.ts';
 import type { ImQQBotConfig, ProactiveConfig } from '../config.ts';
 import { getPolicyStore } from '../evolve/store.ts';
-import type { ChatScope, Logger, ReplyTarget } from '../types.ts';
+import type { ChatScope, Logger, RawAttachment, ReplyTarget } from '../types.ts';
+import type { DownloadedFile } from './attachment.ts';
 import { buildIdentityPrefix } from '../identity/role.ts';
 import { shortSenderId } from '../shared/utils.ts';
 import {
@@ -46,13 +47,18 @@ interface AmbientMessage {
   groupOpenid?: string;
   mentions?: Array<{ is_you?: boolean }>;
   replyTarget?: ReplyTarget;
+  /** 当前消息的原始附件（图片/视频/文件），用于给主动发言补上媒体信息 */
+  attachments?: RawAttachment[];
   /** OneBot 戳一戳后的第一条消息：由 gateway 标记，跳过概率直接回复 */
   pokeFollowUp?: boolean;
+  /** 附件的模型可读描述（本地路径 / 下载失败时的 URL），由旁听入口补上 */
+  mediaText?: string;
 }
 
-/** 旁听处理只读取引用关系，不消费正文 */
+/** 旁听处理只读取引用关系与已下载媒体，不消费正文 */
 interface AmbientState {
   quote?: { entry?: { senderId?: string } };
+  downloadedFiles?: DownloadedFile[];
 }
 
 interface ProactiveBatchItem {
@@ -69,6 +75,8 @@ interface ProactiveRuntime {
   recent: ProactiveBatchItem[];
   /** 上次直接回应「明显在问机器人」的时间，避免连发时开多轮 */
   lastDirectedAt?: number;
+  /** 最近一次和机器人直接对话的人与时间（@ / 引用机器人后正常回复过） */
+  lastDirect?: { senderId: string; senderName?: string; at: number };
   pending?: {
     timer: ReturnType<typeof setTimeout>;
     messages: ProactiveBatchItem[];
@@ -78,6 +86,12 @@ interface ProactiveRuntime {
 }
 
 const proactiveRuntimes = new WeakMap<SessionManager, Map<string, ProactiveRuntime>>();
+
+/**
+ * 刚跟机器人直接聊过的人，下一条未 @ 消息按「继续对话」让模型判断，
+ * 不再受 6% 概率 / 冷却 /「先让别人说两句」的限制。
+ */
+const DIRECT_FOLLOWUP_WINDOW_MS = 5 * 60_000;
 
 /**
  * 群聊是否真的 @ 了机器人。
@@ -110,6 +124,37 @@ function resolveProactiveConfig(config: ImQQBotConfig): ProactiveConfig | undefi
     ...(policy.maxPerHour !== undefined ? { maxPerHour: policy.maxPerHour } : {}),
     ...(policy.maxPerDay !== undefined ? { maxPerDay: policy.maxPerDay } : {}),
   };
+}
+
+/**
+ * 主动发言 / 戳后续不会走 handleInbound 的媒体拼装，这里补上附件信息：
+ * 下载成功给本地路径；失败给原始 URL（qqbot_describe_image 也接受 http(s) 地址）。
+ */
+function buildMediaText(msg: AmbientMessage, state: AmbientState): string | undefined {
+  const attachments = msg.attachments ?? [];
+  if (attachments.length === 0) return undefined;
+  const localByName = new Map(
+    (state.downloadedFiles ?? []).map((file) => [file.filename, file.localPath]),
+  );
+  const lines: string[] = [];
+  for (const att of attachments) {
+    const contentType = att.content_type ?? '';
+    if (contentType === 'voice' || contentType.startsWith('audio/')) continue;
+    const kind = contentType.startsWith('image/')
+      ? 'Image'
+      : contentType.startsWith('video/')
+        ? 'Video'
+        : 'File';
+    const localPath = localByName.get(att.filename);
+    if (localPath !== undefined) {
+      lines.push(`${kind}: ${localPath}`);
+    } else if (att.url !== '') {
+      lines.push(`${kind}: ${att.url}（下载失败，可直接把该地址作为 image 参数重试）`);
+    } else {
+      lines.push(`${kind}: （没有拿到可读取的地址）`);
+    }
+  }
+  return lines.length > 0 ? lines.join('\n') : undefined;
 }
 
 /**
@@ -147,12 +192,14 @@ export function handleAmbientGroupMessage(
     msg.content ?? '',
     replyChannel,
   );
+  const state = ctx.state as unknown as AmbientState;
+  const mediaText = buildMediaText(msg, state);
   considerProactive({
     manager,
     config,
     logger,
-    msg,
-    state: ctx.state as unknown as AmbientState,
+    msg: mediaText !== undefined ? { ...msg, mediaText } : msg,
+    state,
     replyTarget,
   });
   logger.debug(`skip group message without @: sender=${msg.senderId} group=${peerId}`);
@@ -184,7 +231,11 @@ function considerProactive(args: {
     if (!cfg.channels.includes(channel)) return;
   }
 
-  const content = (msg.content ?? '').trim();
+  const raw = (msg.content ?? '').trim();
+  // 附件信息只给模型看，不参与「这条值不值得接」的关键词判断
+  const content = msg.mediaText !== undefined && msg.mediaText !== ''
+    ? `${raw}\n\n${msg.mediaText}`.trim()
+    : raw;
   const key = `${replyTarget.channel ?? 'official'}:${replyTarget.targetId}`;
   const runtime = proactiveRuntime(manager, key);
   const now = Date.now();
@@ -210,6 +261,11 @@ function considerProactive(args: {
     && state.quote.entry.senderId === selfId;
   if (state.quote?.entry?.senderId !== undefined && !quotedSelf) return;
 
+  const lastDirect = runtime.lastDirect;
+  const isRecentPartner = lastDirect !== undefined
+    && now - lastDirect.at <= DIRECT_FOLLOWUP_WINDOW_MS
+    && lastDirect.senderId === item.senderId;
+
   // 戳完后的第一条消息：不走概率/冷却，直接当作「在跟机器人说」。
   // 连续戳只回一次由 gateway 的单个等待项保证，这里只要消费掉这次标记。
   if (isPokeFollowUp) {
@@ -221,19 +277,45 @@ function considerProactive(args: {
     }
     const recent = [...runtime.recent];
     logger.info(`poke follow-up: reply directly group=${replyTarget.targetId} sender=${item.senderId}`);
-    void runDirectedTurn(manager, config, logger, item, recent, replyTarget, 'poke').catch((err) => {
+    void runDirectedTurn(
+      manager,
+      config,
+      logger,
+      item,
+      recent,
+      replyTarget,
+      'poke',
+      isRecentPartner,
+    ).catch((err) => {
       logger.warn(`poke follow-up failed: ${err instanceof Error ? err.message : String(err)}`);
     });
     return;
   }
 
-  if (cfg === undefined || !isProactiveCandidate(content, cfg)) return;
+  // 刚跟机器人聊过的人可以发很短的话（「笨蛋」「？」），不做候选过滤
+  if (!isRecentPartner && (cfg === undefined || !isProactiveCandidate(raw, cfg))) return;
+  if (cfg === undefined) return;
 
   // 明显在问机器人（第二人称 + 疑问 / 引用机器人 / 召唤）：
   // 先让模型判断回复合适程度，>=50% 才跳过概率/冷却直接回。
-  if (quotedSelf || isDirectedAtBot(content)) {
+  // 刚跟机器人聊过的人也一样：按「继续对话」交给模型判断，而不是 6% 旁听。
+  const directed = quotedSelf || isDirectedAtBot(raw);
+  if (directed || isRecentPartner) {
     const recent = [...runtime.recent];
-    void considerDirected({ manager, config, cfg, logger, runtime, item, recent, replyTarget }).catch((err) => {
+    const hint = isRecentPartner
+      ? `${item.senderName ?? item.senderId} 刚跟机器人直接聊过，这句大概率是接着说。`
+      : undefined;
+    void considerDirected({
+      manager,
+      config,
+      cfg,
+      logger,
+      runtime,
+      item,
+      recent,
+      replyTarget,
+      ...(hint !== undefined ? { hint } : {}),
+    }).catch((err) => {
       logger.warn(`directed turn failed: ${err instanceof Error ? err.message : String(err)}`);
     });
     return;
@@ -255,10 +337,12 @@ async function considerDirected(args: {
   item: ProactiveBatchItem;
   recent: readonly ProactiveBatchItem[];
   replyTarget: ReplyTarget;
+  /** 额外交给模型的上文提示（例如「刚跟机器人聊过」） */
+  hint?: string;
 }): Promise<void> {
-  const { manager, config, cfg, logger, runtime, item, recent, replyTarget } = args;
+  const { manager, config, cfg, logger, runtime, item, recent, replyTarget, hint } = args;
   const chance = await manager.judgeDirectedReply(
-    { recent, batch: [item] },
+    { recent, batch: [item], ...(hint !== undefined ? { hint } : {}) },
     'group',
     replyTarget.targetId,
   );
@@ -328,19 +412,44 @@ function scheduleBatch(args: {
   };
 }
 
-/** 正常 @ 回复后：重置冷却，并取消尚未触发的旁听批次，避免刚回完又插一句 */
+/**
+ * 正常 @ 回复后：重置冷却，并取消尚未触发的旁听批次，避免刚回完又插一句。
+ *
+ * 同时记下「这个人刚跟机器人直接聊过」：他接下来没 @ 的消息会被当作继续对话，
+ * 交给模型判断（具体内容和时间会一起进入最近上下文）。
+ */
 export function noteProactiveActivity(
   manager: SessionManager,
   config: ImQQBotConfig,
   peerId: string,
   channel?: ReplyTarget['channel'],
+  direct?: { senderId: string; senderName?: string; text?: string },
 ): void {
   const cfg = config.proactive;
   if (cfg?.enabled !== true) return;
   const ch = channel ?? 'official';
   if (!cfg.channels.includes(ch)) return;
   const runtime = proactiveRuntime(manager, `${ch}:${peerId}`);
-  noteActivity(runtime.state, Date.now());
+  const now = Date.now();
+  noteActivity(runtime.state, now);
+  if (direct !== undefined) {
+    runtime.lastDirect = {
+      senderId: direct.senderId,
+      ...(direct.senderName !== undefined ? { senderName: direct.senderName } : {}),
+      at: now,
+    };
+    // 把这条直接对话也放进「上文」，让判断模型知道刚才聊到哪了；
+    // 机器人自己的回复在会话历史里，模型回复时会自动带上。
+    if (direct.text !== undefined && direct.text.trim() !== '') {
+      runtime.recent.push({
+        senderId: direct.senderId,
+        ...(direct.senderName !== undefined ? { senderName: direct.senderName } : {}),
+        content: direct.text.trim(),
+        at: now,
+      });
+      if (runtime.recent.length > 12) runtime.recent.shift();
+    }
+  }
   if (runtime.pending !== undefined) {
     clearTimeout(runtime.pending.timer);
     runtime.pending = undefined;
@@ -414,6 +523,7 @@ async function runDirectedTurn(
   recent: readonly ProactiveBatchItem[],
   replyTarget: ReplyTarget,
   via: 'directed' | 'poke' = 'directed',
+  justTalked = false,
 ): Promise<void> {
   const record = await manager.getOrCreate('group', replyTarget.targetId, item.senderId, replyTarget);
   record.lastUserText = item.content;
@@ -433,7 +543,9 @@ async function runDirectedTurn(
     ? `【群里有人刚戳了你，紧接着发了这句】${identity}${name}: ${item.content}`
     : `【群里有人直接跟你说】${identity}${name}: ${item.content}`;
   const rule = via === 'poke'
-    ? '对方刚戳过你，这句大概率是在找你。正常接住，1-2 句，别长篇、别客服腔；只有明显不是对你说的时候才输出 [SILENT]。'
+    ? justTalked
+      ? '对方刚跟你聊过，又戳了你再发这句，基本是接着说。正常接住，1-2 句；除非明显在跟别人说，否则不要 [SILENT]。'
+      : '对方刚戳过你，这句大概率是在找你。正常接住，1-2 句，别长篇、别客服腔；只有明显不是对你说的时候才输出 [SILENT]。'
     : '这条没有 @ 你，但明显是在问你。正常回答，1-2 句，别长篇、别客服腔。\n不想接就只输出 [SILENT]。';
   const body = [
     intro,

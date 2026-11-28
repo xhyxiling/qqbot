@@ -22,6 +22,8 @@ export interface ProactiveJudgeInput {
   recent: readonly ProactiveMessage[];
   /** 这次真正触发概率的批次 */
   batch: readonly ProactiveMessage[];
+  /** 额外的上文提示（例如「刚跟机器人直接聊过」），只给判断模型看 */
+  hint?: string;
 }
 
 const JUDGE_SYSTEM_PROMPT = [
@@ -150,6 +152,7 @@ export class ProactiveJudge {
       '最近群聊（旧→新）：',
       format(recent),
       '',
+      ...(input.hint !== undefined ? [`补充信息：${input.hint}`, ''] : []),
       '要判断的消息：',
       format(input.batch.slice(-1)),
     ].join('\n');
