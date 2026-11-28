@@ -271,6 +271,7 @@ evolve/analyze.ts     关键词归因（确定性兜底）：同类差评 >= 2 �
 evolve/llm-analyze.ts 模型归因：理解自然语言备注，失败时命令层回落 analyze.ts
 commands/feedback.ts  /feedback good|bad [备注]
 commands/evolve.ts    /evolve（生成提案）、apply、discard、status、history、rollback
+features/control-*    qqbot_control 的 feedback/evolve action：主人用对话触发同一套命令处理器
 transport/ambient.ts  读策略覆盖主动发言的 4 个数值（enabled/channels 仍以配置为准）
 session/prompt-*.ts   styleNotes 以 order 86.9 注入 system prompt
 ```

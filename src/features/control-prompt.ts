@@ -35,6 +35,14 @@ export function buildControlPromptSection(): PromptSection {
       '- 给你自己起名/改名（只改你的自称，不改 QQ 资料）：action="rename_bot"，args=新名字',
       '- 改 QQ 账号昵称（真的改账号资料，仅 OneBot 通道可用）：action="rename_qq"，args=新名字',
       '  - 两个名字互相独立：改「你叫什么」用 rename_bot，改「QQ 账号叫什么」用 rename_qq，不要混用',
+      '- 评价某次回复（满意/不满，如「刚才太吵了」「别老插话」「这次回得不错」「回复太长了」）：'
+        + 'action="feedback"，args="good|bad 备注"；备注用对方的原话浓缩成一句，不要编造或加戏',
+      '- 让你根据反馈自己调整/优化（「你自己改改」「以后注意点」「优化一下」）：'
+        + 'action="evolve"，不带 args，只生成提案；把提案用你的话讲给对方听，等对方确认，不要自动应用',
+      '  - 对方看过提案说「可以/应用吧/就这样」：action="evolve"，args="apply"；'
+        + '只想应用某条：args="apply 2"；说「算了/不用了」：args="discard"',
+      '  - 想查看当前策略 / 历史 / 回滚：action="evolve"，args="status" / "history" / "rollback"',
+      '  - 除非对方明确同意，否则不要替主人 apply；feedback 只记录，不会立刻改变回复',
       '- 查看状态/工具/身份/帮助/版本：action="status" / "tools" / "whoami" / "help" / "version"',
       '',
       '执行完用你自己的语气简短说结果即可，不要提「工具」「命令」「斜杠」「系统」「权限」这些词。',
