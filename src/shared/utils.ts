@@ -181,6 +181,14 @@ export function resolveEnv(configValue: string, envKey: string): string {
   return process.env[envKey] ?? '';
 }
 
+/** 发送者短标识长度（openid 前 N 位，无昵称时兜底） */
+const SENDER_SHORT_ID_LEN = 8;
+
+/** 无昵称时用 openid 前 N 位作为匿名标识 */
+export function shortSenderId(senderId: string): string {
+  return senderId.slice(0, SENDER_SHORT_ID_LEN);
+}
+
 /**
  * 格式化相对时间
  */

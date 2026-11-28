@@ -64,6 +64,10 @@ export async function bootstrapGateway(
 
   const manager = new SessionManager(ctx, agents, baseConfig, logger);
   const persona = createPersonaRuntime(ctx, baseConfig, manager, logger);
+  // 长期记忆的 LLM 慢路径：拿到宿主 llm 服务后接管异步抽取
+  manager.attachMemoryLlm(persona.llm);
+  // 主动发言前的模型判断：两人对话/话题封闭时不插话
+  manager.attachProactiveLlm(persona.llm);
 
   const endpoints = new Map<ChannelKind, ChannelEndpoint>();
   const transports: GatewayTransport[] = [];

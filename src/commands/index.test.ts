@@ -32,11 +32,12 @@ function findCommand(commands: ReturnType<typeof build>['commands'], name: strin
 describe('buildCommandList — 权限包装', () => {
   it('管理类命令声明 minRole，公开命令不声明', () => {
     const { commands } = build([OWNER]);
-    const admin = ['new', 'compact', 'model', 'preset', 'persona', '人格分析', 'memory', 'tools', 'bot-status', 'stop'];
+    const admin = ['new', 'compact', 'model', 'preset', 'persona', '人格分析', 'tools', 'bot-status', 'stop'];
     for (const name of admin) {
       expect(findCommand(commands, name)?.minRole).toBe('admin');
     }
-    const open = ['bot-ping', 'bot-version', 'whoami', 'bot-help'];
+    // /memory 是本人自助命令：普通群友也要能查看/删除自己的记忆
+    const open = ['bot-ping', 'bot-version', 'whoami', 'bot-help', 'memory'];
     for (const name of open) {
       expect(findCommand(commands, name)?.minRole).toBeUndefined();
     }

@@ -128,6 +128,10 @@ export interface SessionRecord {
   peerId: string;
   senderId: string;
   lastActivity: number;
+  /**
+   * 最近一条用户消息的原文（只用于记忆注入时的相关性筛选，不落盘）。
+   */
+  lastUserText?: string;
   agentPreset?: string;
   /**
    * 本轮是否由模型选择了语音回复（模型调用 `qqbot_voice` 后置 true）。

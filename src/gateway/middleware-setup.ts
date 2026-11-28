@@ -29,6 +29,7 @@ import { buildCommandList } from '../commands/index.ts';
 import type { PersonaCommandServices } from '../commands/types.ts';
 import { attachmentProcessor } from '../middleware/attachment.ts';
 import { historyMedia } from '../middleware/history-media.ts';
+import { handleAmbientGroupMessage } from '../transport/ambient.ts';
 import { questionAnswer, approvalAnswer } from '../middleware/question-answer.ts';
 import { getHistoryStore, historyGroupKey } from '../features/history-store.ts';
 import {
@@ -118,6 +119,17 @@ export function buildMiddlewares(options: MiddlewareSetupOptions): Middleware[] 
 
   // 4.8. 把刚下载的媒体路径回填历史，供后续被 @ 时作为上下文
   middlewares.push(historyMedia(config));
+
+  // 4.9. 旁听消息：未 @ 的群消息在这里记记忆、按概率主动接话，然后结束链路。
+  //      必须放在 mentionGate 之前：SDK 命中未 @ 会直接 stop，后面的
+  //      handleInbound 收不到消息，主动发言也就无从谈起。
+  middlewares.push(async (ctx, next) => {
+    if (handleAmbientGroupMessage(ctx, manager, config, logger)) {
+      ctx.stop('ambient');
+      return;
+    }
+    await next();
+  });
 
   // 5. 群聊 @bot 门控（只拦回复，前面的接收/记录已经完成）
   middlewares.push(mentionGate({

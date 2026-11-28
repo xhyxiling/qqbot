@@ -111,7 +111,7 @@ describe('qqbot_control', () => {
   it('memory add：写进人物画像并回显', async () => {
     const { definition, manager } = setup(makeRecord());
     const result = await definition.execute({ action: 'memory', args: 'add 我喜欢喝美式' }, { agent: {} });
-    expect(manager.addPersonNote).toHaveBeenCalledWith('owner1', '我喜欢喝美式');
+    expect(manager.addPersonNote).toHaveBeenCalledWith('owner1', '我喜欢喝美式', undefined);
     expect(result.text).toContain('已记住');
   });
 

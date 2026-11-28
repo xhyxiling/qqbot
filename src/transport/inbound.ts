@@ -23,6 +23,12 @@ import { clearGroupHistory } from '../features/history-store.ts';
 import { buildIdentityPrefix } from '../identity/role.ts';
 import type { MiddlewareContext } from '@tencent-connect/qqbot-nodejs';
 import { getActiveStickerEngine, cacheSessionAttachments, rememberSessionText, getRecentSessionText } from '../sticker/index.ts';
+import { shortSenderId } from '../shared/utils.ts';
+import {
+  handleAmbientGroupMessage,
+  isGroupAddressed,
+  noteProactiveActivity,
+} from './ambient.ts';
 
 // ── 类型定义 ──
 
@@ -89,20 +95,6 @@ interface ProcessedAttachment {
 // ── 主处理函数 ──
 
 /**
- * 群聊是否真的 @ 了机器人。
- *
- * 中间件链里已有 mentionGate，这里再判一次作为硬门控：官方与 OneBot 的字段
- * 不完全一致（rawEventType / mentions / 正文 @id），配置或 SDK 升级漏掉判定时
- * 也不能让未 @ 的群消息进模型。历史与人格档案在更早的中间件里已记录，不受影响。
- */
-function isGroupAddressed(msg: ProcessedMessage, config: ImQQBotConfig): boolean {
-  if (msg.rawEventType === 'GROUP_AT_MESSAGE_CREATE') return true;
-  if (Array.isArray(msg.mentions) && msg.mentions.some((mention) => mention?.is_you === true)) return true;
-  const selfId = config.onebot?.selfId?.trim() ?? '';
-  return selfId !== '' && (msg.content ?? '').includes(`@${selfId}`);
-}
-
-/**
  * 处理 QQ 入站消息（已经过 SDK 中间件链）
  */
 export async function handleInbound(
@@ -153,8 +145,9 @@ export async function handleInbound(
 
   // ── 群聊 @ 硬门控 ──
   // 群聊只回复 @ 了机器人的消息；未 @ 的消息只进历史/人格档案，不触发回复。
+  // 但长期记忆仍然要记：OneBot 能收到全量群消息，旁听内容也是了解一个人的依据。
   if (scope === 'group' && config.requireMention && !isGroupAddressed(msg, config)) {
-    logger.debug(`skip group message without @: sender=${msg.senderId} group=${peerId}`);
+    handleAmbientGroupMessage(ctx, manager, config, logger);
     return;
   }
 
@@ -165,7 +158,14 @@ export async function handleInbound(
 
   // 记录互动（长期记忆与关系状态）：与会话生命周期无关，
   // 先写记忆再 getOrCreate，`/new` 或闲置回收后记忆仍能延续。
-  manager.recordInteraction(scope, peerId, msg.senderId, msg.senderName, msg.content ?? '');
+  manager.recordInteraction(
+    scope,
+    peerId,
+    msg.senderId,
+    msg.senderName,
+    msg.content ?? '',
+    replyChannel,
+  );
 
   logger.info(`Processing: scope=${scope} peerId=${peerId} body="${agentBody.slice(0, 200)}"`);
 
@@ -186,6 +186,8 @@ export async function handleInbound(
 
   // ── 构建 UserMessage → followup ──
   const content: ContentBlock[] = [{ type: 'text' as const, text: agentBody }];
+  // 记忆注入按这条消息做相关性筛选
+  record.lastUserText = msg.content?.trim() ?? '';
 
   // 语音标记复位：是否发语音由模型在本轮判断（调用 qqbot_voice），
   // 上一轮的请求不会延续到这一轮，避免「发完文字又补一条语音」的重复。
@@ -200,6 +202,8 @@ export async function handleInbound(
   });
 
   record.agent.followup(message);
+  // 正常 @ 回复也算「刚说过话」：重置冷却，并取消还没触发的旁听批次
+  if (scope === 'group') noteProactiveActivity(manager, config, peerId, replyChannel);
   logger.info(`→ followup sent: key=${scope}:${peerId}`);
 
   // 群消息回复后清空历史缓存（避免下次 @ 时重复组包）
@@ -524,10 +528,3 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
-/** 发送者短标识长度（openid 前 N 位，无昵称时兜底） */
-const SENDER_SHORT_ID_LEN = 8;
-
-/** 无昵称时用 openid 前 N 位作为匿名标识 */
-function shortSenderId(senderId: string): string {
-  return senderId.slice(0, SENDER_SHORT_ID_LEN);
-}

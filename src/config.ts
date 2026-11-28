@@ -46,8 +46,19 @@ export interface MemoryConfig {
   enabled: boolean;
   /** 是否自动从用户自述中捕获要点（"我叫… / 我喜欢…"） */
   autoCapture: boolean;
-  /** 每个会话最多保留的记忆条数（超出后淘汰最旧的） */
+  /** 每个人最多保留的事实条数（超出后淘汰最旧的） */
   maxNotes: number;
+  /** 是否用 LLM 异步抽取事实（关闭后只走规则快路径） */
+  llmExtract: boolean;
+  /** LLM 抽取的触发阈值：累计多少条新消息后合并抽取一次 */
+  extractThreshold: number;  /**
+   * 人工指定的同一通道内别名组，例如：
+   * aliases:
+   *   - ["u_c2c_openid", "m_group_member_openid"]
+   * 启动时会把这些 ID 归并到同一份人物记忆。
+   * 官方 openid 与 OneBot QQ 号分属两套存储，跨通道的组合会被自动拆开、不会合并。
+   */
+  aliases: string[][];
 }
 
 /**
@@ -242,6 +253,35 @@ export interface OneBotConfig {
   selfId: string;
 }
 
+/**
+ * 群聊主动发言控制。
+ *
+ * 只作用于「没有 @ 机器人、但机器人能收到」的群消息（OneBot 全量消息权限）。
+ * 命中概率 + 冷却 + 每小时/每天上限后，模型仍可选择输出 [SILENT] 不发言。
+ */
+export interface ProactiveConfig {
+  /** 总开关（默认关闭，避免升级后突然在群里插话） */
+  enabled: boolean;
+  /** 允许主动发言的通道；默认只开 OneBot，避免官方/QQ 双后端重复冒泡 */
+  channels: Array<'official' | 'onebot'>;
+  /** 每个候选批次的发言概率 0-1 */
+  probability: number;
+  /** 概率通过后，再让模型判断「现在插话会不会打断别人」；两人对话时通常不接 */
+  modelJudge: boolean;
+  /** 两次主动发言的最小间隔（秒） */
+  minIntervalSec: number;
+  /** 每小时最多主动发言次数 */
+  maxPerHour: number;
+  /** 每天最多主动发言次数 */
+  maxPerDay: number;
+  /** 等一串消息说完再决定（毫秒），避免逐条接话 */
+  debounceMs: number;
+  /** 太短的消息不接（去空白后的字符数） */
+  minChars: number;
+  /** 这些前缀开头的消息不接（命令等） */
+  ignorePrefixes: string[];
+}
+
 export interface ImQQBotConfig {
   /**
    * 传输后端：
@@ -266,6 +306,8 @@ export interface ImQQBotConfig {
   cwd?: string;
   /** 是否启用群消息 @mention 门控 */
   requireMention: boolean;
+  /** 群聊主动发言控制（仅未 @ 的旁听消息） */
+  proactive?: ProactiveConfig;
   /** 全局 system prompt（所有群聊/私聊生效，不含人格差异） */
   globalPrompt: string;
   /** 人格预设列表（QQ 端 /persona 切换） */
@@ -326,7 +368,11 @@ export const IdentitySchema: Schema<IdentityConfig> = Schema.object({
 export const MemorySchema: Schema<MemoryConfig> = Schema.object({
   enabled: Schema.boolean().default(true).description('是否启用记忆与关系状态'),
   autoCapture: Schema.boolean().default(true).description('是否自动捕获用户自述要点'),
-  maxNotes: Schema.number().default(20).description('每个会话最多保留的记忆条数'),
+  maxNotes: Schema.number().default(40).description('每个人最多保留的事实条数'),
+  llmExtract: Schema.boolean().default(true).description('是否用 LLM 异步抽取长期记忆'),
+  extractThreshold: Schema.number().default(8).description('LLM 抽取的触发消息数'),
+  aliases: Schema.array(Schema.array(Schema.string())).default([])
+    .description('同一人的人工别名组（官方 openid / OneBot QQ 号）'),
 });
 
 /** 群聊人格档案子 Schema（独立导出：config 路由的服务端校验复用） */
@@ -442,6 +488,31 @@ export const ConfigSchema: Schema<ImQQBotConfig> = Schema.object({
   preset: Schema.string().description('Agent preset id'),
   cwd: Schema.string().description('Agent working directory (default ~/.dsh-qqbot/workspace)'),
   requireMention: Schema.boolean().default(true).description('群聊是否需要@bot触发'),
+  proactive: Schema.object({
+    enabled: Schema.boolean().default(false).description('是否允许机器人在未被 @ 时主动接话'),
+    channels: Schema.array(Schema.union(['official', 'onebot'])).default(['onebot'])
+      .description('允许主动发言的通道；默认只开 OneBot，避免双后端重复冒泡'),
+    probability: Schema.number().default(0.06).description('每个候选批次的主动发言概率 0-1'),
+    modelJudge: Schema.boolean().default(true)
+      .description('概率通过后再让模型判断是否适合插话（两人对话时默认不打断）'),
+    minIntervalSec: Schema.number().default(180).description('两次主动发言的最小间隔（秒）'),
+    maxPerHour: Schema.number().default(3).description('每小时最多主动发言次数'),
+    maxPerDay: Schema.number().default(15).description('每天最多主动发言次数'),
+    debounceMs: Schema.number().default(3000).description('等待一串消息说完的毫秒数'),
+    minChars: Schema.number().default(2).description('短于该长度的消息不接'),
+    ignorePrefixes: Schema.array(Schema.string()).default(['/', '#']).description('这些前缀开头的消息不接'),
+  }).default({
+    enabled: false,
+    channels: ['onebot'],
+    probability: 0.06,
+    modelJudge: true,
+    minIntervalSec: 180,
+    maxPerHour: 3,
+    maxPerDay: 15,
+    debounceMs: 3000,
+    minChars: 2,
+    ignorePrefixes: ['/', '#'],
+  }).description('群聊主动发言控制（未被 @ 的旁听消息）'),
   globalPrompt: Schema.string().default('')
     .description('全局 system prompt（所有群聊/私聊生效，建议写多条消息分隔规则）'),
   personas: Schema.array(PersonaPresetSchema).default([])
@@ -474,7 +545,10 @@ export const ConfigSchema: Schema<ImQQBotConfig> = Schema.object({
   memory: MemorySchema.default({
     enabled: true,
     autoCapture: true,
-    maxNotes: 20,
+    maxNotes: 40,
+    llmExtract: true,
+    extractThreshold: 8,
+    aliases: [],
   }).description('记忆与关系状态'),
   personaAnalysis: PersonaAnalysisSchema.default({
     enabled: true,

@@ -9,5 +9,5 @@ export {
   PLUGIN_VERSION,
   PLUGIN_PACKAGE_NAME,
 } from './utils.ts';
-export { getScopePeer } from './scope.ts';
+export { getScopePeer, getCommandChannel } from './scope.ts';
 export { sendMarkdownChunked } from './send-helper.ts';

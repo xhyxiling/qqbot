@@ -32,6 +32,11 @@ export { parseStreamFrame } from './events.ts';
 /** 出站处理器签名（注册到 ctx.on('session/event')） */
 export type OutboundHandler = (session: SessionLike, event: RawSessionEvent) => void;
 
+/** 主动旁听时模型可选择不发言：整条回复只有这个标记时丢弃（容忍尾随标点） */
+function isSilentReply(text: string): boolean {
+  return text.replace(/[\s。.!！?？~～]/g, '').toUpperCase() === '[SILENT]';
+}
+
 /** 出站事件入口集合：durable 事件 + 实时流式帧 */
 export interface OutboundHandlers {
   /** durable session 事件入口（注册到 ctx.on('session/event')） */
@@ -250,6 +255,12 @@ class OutboundRouter {
   private onMessage(sessionId: string, record: SessionRecord, event: MessageEvent): void {
     const buffer = this.buffers.get(sessionId);
     if (buffer !== undefined && buffer.text.trim()) {
+      if (isSilentReply(buffer.text)) {
+        buffer.cancel();
+        this.buffers.delete(sessionId);
+        this.logger.info(`im-qqbot: 主动旁听选择不发言（session=${sessionId}）`);
+        return;
+      }
       // 先记录全文：本轮语音回复时朗读这条回复，文字不再重复发送
       this.lastReplyTexts.set(sessionId, buffer.text);
       if (record.voiceRequested === true) {
@@ -285,6 +296,11 @@ class OutboundRouter {
     }
     const fullText = textParts.join('\n');
     if (!fullText.trim()) return;
+    if (isSilentReply(fullText)) {
+      this.buffers.delete(sessionId);
+      this.logger.info(`im-qqbot: 主动旁听选择不发言（session=${sessionId}）`);
+      return;
+    }
 
     this.lastReplyTexts.set(sessionId, fullText);
     this.buffers.delete(sessionId);
