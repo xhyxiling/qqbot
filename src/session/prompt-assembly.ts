@@ -50,6 +50,8 @@ export interface SessionPromptInput {
   names: BotNames;
   /** 最近一条用户消息（记忆相关性筛选用） */
   lastUserText?: string;
+  /** 反馈驱动的表达偏好（/evolve 应用后写入，为空时不注入） */
+  styleNotes?: string[];
   /** 表情库快照（未启用/为空时 total=0，不产生 section） */
   sticker?: {
     total: number;
@@ -115,6 +117,19 @@ export function buildSessionPromptSections(input: SessionPromptInput): PromptSec
     }
     : undefined;
 
+  // 反馈驱动的表达偏好（order 86.9）：来自 /feedback bad 的同类反馈，
+  // 经 /evolve apply 后写入本地策略。只在非空时注入，避免空 section 干扰。
+  const styleNotes = (input.styleNotes ?? []).filter((note) => note.trim() !== '');
+  const policyStyleSection: PromptSection | undefined = styleNotes.length > 0
+    ? {
+      name: 'qqbot:policy-style',
+      order: 86.9,
+      text: '【表达偏好】主人根据实际回复反馈，要求你在以下方面调整（优先级高于人格里的默认表达习惯）：\n'
+        + styleNotes.map((note) => `- ${note}`).join('\n')
+        + '\n自然地照做即可，不要提及这份偏好清单，也不要说「根据你的反馈」。',
+    }
+    : undefined;
+
   // 记忆与关系状态（order 87）排在人格之后：模型先知道「自己是谁」，
   // 再知道「对面是谁、聊过什么」，避免关系描述盖过人格语气。
   const memorySection = buildMemoryPromptSection(input.chatMemory, config.memory);
@@ -148,6 +163,7 @@ export function buildSessionPromptSections(input: SessionPromptInput): PromptSec
     buildNamesPromptSection(names),
     visionSection,
     personLookupSection,
+    policyStyleSection,
     memorySection,
     personSection,
     voiceSection,

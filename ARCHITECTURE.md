@@ -68,6 +68,7 @@ src/{memory,personas,identity,features,media,voice,sticker,model,commands,expres
 | `src/voice/` | TTS 语音回复 | `voice-config.ts`、`voice-tool.ts`、`voice-reply.ts`、`tts.ts`、`voice-prompt.ts` |
 | `src/sticker/` | 表情包收藏/选择/进化 | `collector.ts`、`selector.ts`、`evolver.ts`、`storage.ts`、`tools.ts` |
 | `src/model/` | 模型路由与偏好持久化 | `model-resolver.ts`、`prefs-store.ts`、`settings-reader.ts` |
+| `src/evolve/` | 反馈与策略进化 | `store.ts`（反馈/策略持久化、版本与回滚）、`analyze.ts`（确定性归因） |
 | `src/commands/` | 斜杠命令 | `index.ts` 编排，其余一命令一文件 |
 | `src/setup/` | 配置写入辅助 | `persist.ts` 等 |
 | `src/client/` | 浏览器半边（设置面板） | `index.ts`、`config-panel.ts` |
@@ -213,11 +214,13 @@ OneBot 的 `accessToken` 等连接信息写入 profile 的 `cordis.patch.yml`，
 
 未 @ 的消息如果看起来在问机器人（`features/proactive.ts` 的 `isDirectedAtBot`：第二人称 + 疑问、
 引用机器人消息、或「在吗」这类召唤），先由 `ProactiveJudge.replyChance` 让模型给出 0-1 的回复
-合适程度：≥0.5 时跳过概率/冷却/插话判断直接回复（`runDirectedTurn`），<0.5 落回普通旁听。
-这样既避免「群里明明在问它却不吭声」，也不会把旁人的对话全接过来。
+概率，再按这个概率掷骰：命中就跳过 6%/冷却/插话判断直接回复（`runDirectedTurn`），没命中沉默。
+既不装死，也不会把旁人的对话全接过来。
 
 `onebot/gateway.ts` 还会处理 `notice` 事件里的戳一戳：被戳时先自动回戳（10 秒冷却），
-再通过 `transport/poke.ts` 投递一次「【戳一戳】…」的 followup，让模型决定接话还是 `[SILENT]`。
+然后等 6 秒再决定要不要说话——期间对方发消息就取消等待（那条消息才是要回的）；
+最近 5 分钟没有上文则不回应，等对方的下一条消息；连续戳只保留一个待处理项、只回一次。
+真正接话时通过 `transport/poke.ts` 投递「【戳一戳】…」，模型结合会话历史决定回复或 `[SILENT]`。
 
 ```
 transport/ambient.ts       计时、批次、上下文、模型调用
@@ -259,6 +262,22 @@ prompt-assembly.ts   order 86.8 告诉模型何时调用工具
 ```
 
 没有后台分析器：档案只写盘，模型在需要时调用工具读取。当前对话对象可被所有人查看；指定其他人需要 owner/admin。
+
+### 9.5 反馈驱动进化
+
+```
+evolve/store.ts       feedback.json（最多 500 条）+ policies.json（当前策略/版本历史/pending）
+evolve/analyze.ts     关键词归因（确定性兜底）：同类差评 >= 2 条才提案
+evolve/llm-analyze.ts 模型归因：理解自然语言备注，失败时命令层回落 analyze.ts
+commands/feedback.ts  /feedback good|bad [备注]
+commands/evolve.ts    /evolve（生成提案）、apply、discard、status、history、rollback
+transport/ambient.ts  读策略覆盖主动发言的 4 个数值（enabled/channels 仍以配置为准）
+session/prompt-*.ts   styleNotes 以 order 86.9 注入 system prompt
+```
+
+原则：反馈只记录，提案只展示，`/evolve apply` 后才写策略；不自动改代码。模型归因
+仍受白名单约束——只能改主动发言概率（夹在 2%–30%）或追加表达偏好，其余参数不可动。
+策略文件在 `~/.dsh-qqbot/policies.json`，回滚会恢复上一个版本的数值与表达偏好。
 
 ## 10. 扩展点
 

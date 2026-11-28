@@ -47,6 +47,8 @@ import {
 import { IdentityStore, inferChannel } from '../memory/identity-store.ts';
 import { MemoryExtractor } from '../memory/memory-extractor.ts';
 import { ProactiveJudge, type ProactiveJudgeInput } from '../features/proactive-judge.ts';
+import { FeedbackAnalyzer } from '../evolve/llm-analyze.ts';
+import type { FeedbackItem, PolicyProposal, PolicyValues } from '../evolve/store.ts';
 import type { LlmRuntimeLike } from '../features/model-route.ts';
 import { extractMemoryFacts } from '../memory/memory-prompt.ts';
 import { IdleEvictor } from './idle-evictor.ts';
@@ -55,6 +57,7 @@ import { resolveActiveVoiceSettings } from '../voice/voice-config.ts';
 import { VOICE_TOOL_NAME } from '../voice/voice-tool.ts';
 import { DESCRIBE_IMAGE_TOOL_NAME } from '../media/vision-tool.ts';
 import { getActiveStickerEngine } from '../sticker/index.ts';
+import { getPolicyStore } from '../evolve/store.ts';
 import type { QuestionChannel } from '../features/question-channel.ts';
 import type { ApprovalChannel } from '../features/approval-channel.ts';
 import type {
@@ -134,6 +137,8 @@ export class SessionManager {
   private readonly memoryExtractors: Partial<Record<ChannelKind, MemoryExtractor>> = {};
   /** 主动发言前的模型判断（llm 可用时由 bootstrap 注入） */
   private proactiveJudge: ProactiveJudge | undefined;
+  /** 反馈归因的模型分析（llm 可用时由 bootstrap 注入；失败回落关键词规则） */
+  private feedbackAnalyzer: FeedbackAnalyzer | undefined;
   /** 机器人自称 / QQ 账号昵称（~/.dsh-qqbot/names.json） */
   private readonly namesStore: NamesStore;
   private readonly ctx: Context;
@@ -226,6 +231,7 @@ export class SessionManager {
         personMemory: personId === '' ? undefined : memoryStore.getPerson(personId),
         names: this.namesStore.get(),
         ...(record.lastUserText !== undefined ? { lastUserText: record.lastUserText } : {}),
+        styleNotes: getPolicyStore().snapshot().styleNotes,
         sticker: {
           total: stickerEngine?.store.all().length ?? 0,
           catalog: stickerEngine?.store.numbered().map(({ no, sticker }) => ({
@@ -722,13 +728,21 @@ export class SessionManager {
    */
   attachProactiveLlm(llm?: LlmRuntimeLike): void {
     if (llm?.stream === undefined) return;
+    const getRoute = (scope: ChatScope, peerId: string) => this.getEffectiveModel(scope, peerId) ?? (
+      this.config.provider && this.config.model
+        ? { provider: this.config.provider, model: this.config.model }
+        : undefined
+    );
     this.proactiveJudge = new ProactiveJudge({
       llm,
-      getRoute: (scope, peerId) => this.getEffectiveModel(scope, peerId) ?? (
-        this.config.provider && this.config.model
-          ? { provider: this.config.provider, model: this.config.model }
-          : undefined
-      ),
+      getRoute,
+      logger: this.logger,
+    });
+    // 同一个 llm 顺手接管反馈归因：/evolve 优先让模型理解备注，
+    // 失败时命令层回落到 evolve/analyze.ts 的关键词规则。
+    this.feedbackAnalyzer = new FeedbackAnalyzer({
+      llm,
+      getRoute,
       logger: this.logger,
     });
   }
@@ -762,6 +776,24 @@ export class SessionManager {
     if (this.config.proactive.modelJudge !== true) return 1;
     if (this.proactiveJudge === undefined) return 1;
     return this.proactiveJudge.replyChance(scope, peerId, input);
+  }
+
+  /**
+   * 用模型归因反馈，生成策略提案（/evolve 调用）。
+   *
+   * 返回 undefined 表示模型不可用或调用失败，命令层应回落到关键词规则；
+   * 返回数组（可能为空）表示模型正常给出了结论。差评不足 2 条时直接返回空，
+   * 不消耗模型调用。
+   */
+  async analyzeFeedbackWithModel(
+    items: readonly FeedbackItem[],
+    current: PolicyValues,
+    scope: ChatScope,
+    peerId: string,
+  ): Promise<PolicyProposal[] | undefined> {
+    if (this.feedbackAnalyzer === undefined) return undefined;
+    if (items.filter((item) => item.verdict === 'bad').length < 2) return [];
+    return this.feedbackAnalyzer.analyze(items, current, scope, peerId);
   }
 
   /** 手动给某人画像加一条要点；记忆关闭或内容重复时返回 undefined */
@@ -1283,6 +1315,8 @@ export class SessionManager {
     }
     this.proactiveJudge?.dispose();
     this.proactiveJudge = undefined;
+    this.feedbackAnalyzer?.dispose();
+    this.feedbackAnalyzer = undefined;
     this.identityStore.flush();
     const records = [...this.sessions.values()];
     this.sessions.clear();

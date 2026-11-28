@@ -19,7 +19,8 @@
 import type { MiddlewareContext } from '@tencent-connect/qqbot-nodejs';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import type { SessionManager } from '../session/index.ts';
-import type { ImQQBotConfig } from '../config.ts';
+import type { ImQQBotConfig, ProactiveConfig } from '../config.ts';
+import { getPolicyStore } from '../evolve/store.ts';
 import type { ChatScope, Logger, ReplyTarget } from '../types.ts';
 import { buildIdentityPrefix } from '../identity/role.ts';
 import { shortSenderId } from '../shared/utils.ts';
@@ -91,6 +92,25 @@ export function isGroupAddressed(msg: AmbientMessage, config: ImQQBotConfig): bo
 }
 
 /**
+ * 把 /evolve 应用过的策略值叠加到配置上。
+ *
+ * 策略只覆盖 4 个数值参数；enabled/channels 等开关仍以配置为准，
+ * 避免反馈把功能整个打开或关掉。每批消息读一次内存缓存，不碰磁盘。
+ */
+function resolveProactiveConfig(config: ImQQBotConfig): ProactiveConfig | undefined {
+  const base = config.proactive;
+  if (base === undefined) return undefined;
+  const policy = getPolicyStore().snapshot().proactive;
+  return {
+    ...base,
+    ...(policy.probability !== undefined ? { probability: policy.probability } : {}),
+    ...(policy.minIntervalSec !== undefined ? { minIntervalSec: policy.minIntervalSec } : {}),
+    ...(policy.maxPerHour !== undefined ? { maxPerHour: policy.maxPerHour } : {}),
+    ...(policy.maxPerDay !== undefined ? { maxPerDay: policy.maxPerDay } : {}),
+  };
+}
+
+/**
  * 处理「没有 @ 机器人」的群消息：只记记忆，并按概率决定是否主动接话。
  *
  * 这个函数会被放在 SDK mentionGate **之前** 调用。因为 mentionGate 命中
@@ -152,7 +172,7 @@ function considerProactive(args: {
   replyTarget: ReplyTarget;
 }): void {
   const { manager, config, logger, msg, state, replyTarget } = args;
-  const cfg = config.proactive;
+  const cfg = resolveProactiveConfig(config);
   if (cfg?.enabled !== true) return;
 
   const channel = replyTarget.channel ?? 'official';
@@ -189,13 +209,13 @@ function considerProactive(args: {
   // 先让模型判断回复合适程度，>=50% 才跳过概率/冷却直接回。
   if (quotedSelf || isDirectedAtBot(content)) {
     const recent = [...runtime.recent];
-    void considerDirected({ manager, config, logger, runtime, item, recent, replyTarget }).catch((err) => {
+    void considerDirected({ manager, config, cfg, logger, runtime, item, recent, replyTarget }).catch((err) => {
       logger.warn(`directed turn failed: ${err instanceof Error ? err.message : String(err)}`);
     });
     return;
   }
 
-  scheduleBatch({ manager, config, logger, runtime, item, replyTarget });
+  scheduleBatch({ manager, config, cfg, logger, runtime, item, replyTarget });
 }
 
 /**
@@ -205,13 +225,14 @@ function considerProactive(args: {
 async function considerDirected(args: {
   manager: SessionManager;
   config: ImQQBotConfig;
+  cfg: ProactiveConfig;
   logger: Logger;
   runtime: ProactiveRuntime;
   item: ProactiveBatchItem;
   recent: readonly ProactiveBatchItem[];
   replyTarget: ReplyTarget;
 }): Promise<void> {
-  const { manager, config, logger, runtime, item, recent, replyTarget } = args;
+  const { manager, config, cfg, logger, runtime, item, recent, replyTarget } = args;
   const chance = await manager.judgeDirectedReply(
     { recent, batch: [item] },
     'group',
@@ -221,33 +242,40 @@ async function considerDirected(args: {
     `directed judge: chance=${chance.toFixed(2)} group=${replyTarget.targetId} sender=${item.senderId}`,
   );
 
-  if (chance >= 0.5) {
-    // 连续追问时只开一轮，避免同一句话被回多次
-    if (Date.now() - (runtime.lastDirectedAt ?? 0) < 3_000) return;
-    runtime.lastDirectedAt = Date.now();
-    if (runtime.pending !== undefined) {
-      clearTimeout(runtime.pending.timer);
-      runtime.pending = undefined;
-    }
-    await runDirectedTurn(manager, config, logger, item, recent, replyTarget);
+  // 模型给出的百分比就是这次回复的概率：命中才回，不命中就保持沉默，
+  // 不再回落到 6% 的普通旁听概率（否则「明显在问」仍会被二次掐掉）。
+  if (chance <= 0) {
+    // 判断不可用（未配置模型 / 调用失败）：退回普通旁听
+    scheduleBatch({ manager, config, cfg, logger, runtime, item, replyTarget });
+    return;
+  }
+  if (Math.random() >= chance) {
+    logger.debug(`directed judge: miss chance=${chance.toFixed(2)} group=${replyTarget.targetId}`);
     return;
   }
 
-  scheduleBatch({ manager, config, logger, runtime, item, replyTarget });
+  // 连续追问时只开一轮，避免同一句话被回多次
+  if (Date.now() - (runtime.lastDirectedAt ?? 0) < 3_000) return;
+  runtime.lastDirectedAt = Date.now();
+  if (runtime.pending !== undefined) {
+    clearTimeout(runtime.pending.timer);
+    runtime.pending = undefined;
+  }
+  await runDirectedTurn(manager, config, logger, item, recent, replyTarget);
 }
 
 /** 普通旁听：进入 debounce 批次，由概率/冷却/配额决定是否发言 */
 function scheduleBatch(args: {
   manager: SessionManager;
   config: ImQQBotConfig;
+  cfg: ProactiveConfig;
   logger: Logger;
   runtime: ProactiveRuntime;
   item: ProactiveBatchItem;
   replyTarget: ReplyTarget;
 }): void {
-  const { manager, config, logger, runtime, item, replyTarget } = args;
-  const cfg = config.proactive;
-  if (cfg?.enabled !== true) return;
+  const { manager, config, cfg, logger, runtime, item, replyTarget } = args;
+  if (!cfg.enabled) return;
 
   if (runtime.pending !== undefined) {
     runtime.pending.messages.push(item);

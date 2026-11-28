@@ -16,6 +16,8 @@ import { memoryCommand } from './memory.ts';
 import { toolsCommand } from './tools.ts';
 import { whoamiCommand } from './whoami.ts';
 import { statusCommand } from './status.ts';
+import { feedbackCommand } from './feedback.ts';
+import { evolveCommand } from './evolve.ts';
 import { helpCommand } from './help.ts';
 import { pingCommand, versionCommand, stopCommand } from './misc.ts';
 import {
@@ -69,6 +71,8 @@ export function buildCommandList(deps: CommandDeps): CategorizedCommand[] {
     memoryCommand(deps),
     toolsCommand(deps),
     whoamiCommand(deps),
+    feedbackCommand(deps),
+    evolveCommand(deps),
   ];
 
   // help 需要访问完整列表（含自身），通过闭包惰性引用
