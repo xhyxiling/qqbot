@@ -1984,27 +1984,42 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
       'openid 可在 QQ 里对机器人发送 /whoami 查看；私聊与群聊是两套值。'),
   ];
 
+  // ── 身份 ID 类型：按 backend 区分 ──
+  //
+  // QQ 官方 Bot SDK:  senderId = openid (如 "u_6x7qWczqMhS0_Db_xpvAXw")
+  // OneBot 11:        senderId = QQ 账号数字 (如 "1759893823")
+  //
+  // 两个后端给的 senderId 类型完全不同，用户切后端后必须改名单。
+  // 下面的面板文案、label、placeholder 全部按当前 backend 动态切换，
+  // 并且在 backend 切换后给提示。
+  const isOnebot = backend !== 'official';
+  const idType = isOnebot ? 'QQ 账号' : 'openid';
+  const idTypeExample = isOnebot ? '1759893823（纯数字）' : 'u_6x7qWczqMhS0_Db_xpvAXw';
+  const idHint = isOnebot
+    ? '当前连接方式是「NapCat/OneBot」，名单里填 QQ 账号数字（如 1759893823）。/whoami 命令也会返回 QQ 号。'
+    : '当前连接方式是「QQ 官方 Bot」，名单里填 openid。在 QQ 里对机器人发送 /whoami 可查看并复制自己的 openid。私聊（user_openid）与群聊（member_openid）是两套值，需要分别添加。';
+
   const identityPanel: ReactNode[] = [
     createElement(SwitchRow, {
       label: '身份识别', checked: identity.enabled,
-      help: '按 openid 判定发送者身份，并在消息前注入 [身份: 主人 / 管理员 / 朋友 / 陌生人]；三份名单都为空时不注入，保持旧行为',
+      help: `按 ${idType} 判定发送者身份，并在消息前注入 [身份: 主人 / 管理员 / 朋友 / 陌生人]；三份名单都为空时不注入，保持旧行为`,
       onChange: (v) => { patch('identity', { ...identity, enabled: v }); },
     }),
     identity.enabled
       ? createElement('p', { className: 'imqb2-hint', style: { padding: '0 0 8px' } },
-          '在 QQ 里对机器人发送 /whoami 可查看并复制自己的 openid。私聊（user_openid）与群聊（member_openid）是两套值，需要分别添加。')
+          idHint)
       : null,
     identity.enabled
       ? createElement(AreaRow, {
-          label: '主人 openid', rows: 2,
-          help: '对应「身份: 主人」，人格里的专属称呼只对这些人生效；一行一个',
+          label: `主人 ${idType}`, rows: 2,
+          help: `对应「身份: 主人」，人格里的专属称呼只对这些人生效；一行一个（例如 ${idTypeExample}）`,
           value: identity.ownerOpenIds.join('\n'),
           onChange: (v) => { patch('identity', { ...identity, ownerOpenIds: v.split('\n').map((s) => s.trim()) }); },
         })
       : null,
     identity.enabled
       ? createElement(AreaRow, {
-          label: '管理员 openid', rows: 2,
+          label: `管理员 ${idType}`, rows: 2,
           help: '对应「身份: 管理员」，按熟人对待但不套用主人设定；一行一个',
           value: identity.adminOpenIds.join('\n'),
           onChange: (v) => { patch('identity', { ...identity, adminOpenIds: v.split('\n').map((s) => s.trim()) }); },
@@ -2012,11 +2027,18 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
       : null,
     identity.enabled
       ? createElement(AreaRow, {
-          label: '朋友 openid', rows: 2,
+          label: `朋友 ${idType}`, rows: 2,
           help: '对应「身份: 朋友」，其余未命中名单的人都是「陌生人」；一行一个',
           value: identity.friendOpenIds.join('\n'),
           onChange: (v) => { patch('identity', { ...identity, friendOpenIds: v.split('\n').map((s) => s.trim()) }); },
         })
+      : null,
+    // backend 切换警告：OneBot 后端下名单全是 openid（u_ 开头）时提示用户
+    identity.enabled && isOnebot
+      ? identity.ownerOpenIds.some((id) => id.startsWith('u_'))
+        ? createElement('p', { className: 'imqb2-hint', style: { padding: '0 0 8px', color: 'var(--color-warn, #d97706)' } },
+            '⚠️ 检测到主人列表里有 u_ 开头的 openid —— OneBot 后端需要填 QQ 账号数字，openid 在这里匹配不上。')
+        : null
       : null,
   ];
 
